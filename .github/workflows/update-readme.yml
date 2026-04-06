@@ -1,0 +1,43 @@
+name: Update README version
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update version in README
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          DATE="$(date -u '+%Y-%m-%d')"
+          FILE="README.md"
+
+          # Update "Latest: vX.Y.Z (YYYY-MM-DD)"
+          sed -i "s|^\*\*Latest: v[0-9]*\.[0-9]*\.[0-9]*.*(.*)\*\*|**Latest: ${VERSION} (${DATE})**|" "$FILE"
+          sed -i "s|^\*\*Latest: v[0-9]*\.[0-9]*\.[0-9]*\*\*|**Latest: ${VERSION} (${DATE})**|" "$FILE"
+
+          # Update download URLs
+          sed -i "s|bdemu-v[0-9]*\.[0-9]*\.[0-9]*|bdemu-${VERSION}|g" "$FILE"
+          sed -i "s|/download/v[0-9]*\.[0-9]*\.[0-9]*/|/download/${VERSION}/|g" "$FILE"
+
+          # Update version in example output
+          sed -i "s|bdemu [0-9]*\.[0-9]*\.[0-9]*|bdemu ${VERSION#v}|g" "$FILE"
+          sed -i "s|freemkv [0-9]*\.[0-9]*\.[0-9]*|freemkv ${VERSION#v}|g" "$FILE"
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || git commit -m "Update to bdemu ${VERSION}"
+          git push
