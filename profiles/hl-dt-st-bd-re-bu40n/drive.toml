@@ -1,0 +1,14 @@
+# HL-DT-ST BD-RE BU40N 1.03
+# Created from issue #5
+
+[drive]
+manufacturer = "HL-DT-ST"
+product = "BD-RE BU40N"
+revision = "1.03"
+serial = "AA0A0AA0000"
+firmware_date = "2018-10-24"
+platform = "MTK MT1959"
+current_profile = 0x0043
+
+# Stub profile from freemkv info --share.
+# Binary .bin files can be added for full emulation.
