@@ -1,0 +1,32 @@
+# BU40N — Real hardware capture from /dev/sg4
+# Captured with sg_raw on 2026-04-06
+
+[drive]
+manufacturer = "HL-DT-ST"
+product = "BD-RE BU40N"
+revision = "1.03"
+serial = "MO6J7HB1010"
+firmware_date = "2018-10-24"
+current_profile = 0x0043
+
+[files]
+inquiry = "inquiry.bin"
+rpc_state = "rpc_state.bin"
+mode_2a = "mode_2a.bin"
+
+[features]
+0x0000 = "gc_0000.bin"
+0x0003 = "gc_0003.bin"
+0x001D = "gc_001d.bin"
+0x001E = "gc_001e.bin"
+0x001F = "gc_001f.bin"
+0x0040 = "gc_0040.bin"
+0x0041 = "gc_0041.bin"
+0x0107 = "gc_0107.bin"
+0x0108 = "gc_0108.bin"
+0x010C = "gc_010c.bin"
+0x010D = "gc_010d.bin"
+
+# Unlock: bdemu logs all unlock CDBs and always succeeds.
+# The response includes "MMkv" signature so MakeMKV thinks the drive is unlocked.
+# No unlock config needed — bdemu handles it automatically.
