@@ -1,0 +1,15 @@
+# PIONEER BD-RW BDR-S09 1.34
+# Created from issue #2
+
+[drive]
+manufacturer = "PIONEER"
+product = "BD-RW BDR-S09"
+revision = "1.34"
+serial = "AAAA000000AA"
+firmware_date = "2016-04-25"
+platform = "Pioneer RS8600"
+current_profile = 0x0043
+
+# NOTE: This is a stub profile from freemkv info --share.
+# Binary .bin files need to be added for full emulation.
+# The drive data above is sufficient for identification.
