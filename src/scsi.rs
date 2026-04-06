@@ -12,6 +12,11 @@ static mut CALL_NUM: u32 = 0;
 static mut LAST_SENSE: [u8; 3] = [0, 0, 0]; // sense_key, asc, ascq
 static mut MEDIA_CHANGED: bool = false;
 
+/// Called by the control socket to signal disc change.
+pub unsafe fn set_media_changed(changed: bool) {
+    MEDIA_CHANGED = changed;
+}
+
 fn call() -> u32 {
     unsafe { CALL_NUM += 1; CALL_NUM }
 }
