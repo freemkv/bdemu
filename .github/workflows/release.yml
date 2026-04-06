@@ -37,8 +37,34 @@ jobs:
 
       - name: Package
         run: |
-          cd target/release
-          tar czf "../../bdemu-${{ github.ref_name }}-x86_64-linux.tar.gz" bdemu libbdemu.so
+          DIR="bdemu-${{ github.ref_name }}"
+          mkdir -p "$DIR/profiles"
+          cp target/release/bdemu "$DIR/"
+          cp target/release/libbdemu.so "$DIR/"
+          cp -r profiles/* "$DIR/profiles/" 2>/dev/null || true
+          cat > "$DIR/example.sh" << 'SCRIPT'
+          #!/bin/bash
+          # Example: emulate a BU40N drive and run freemkv against it
+          #
+          # 1. Download freemkv: https://github.com/freemkv/freemkv/releases/latest
+          # 2. Run:
+          #      BDEMU_PROFILE=profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 \
+          #        LD_PRELOAD=./libbdemu.so \
+          #        ./freemkv info
+
+          PROFILE="${1:-profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000}"
+
+          echo "Emulating drive from: $PROFILE"
+          echo "Run your app with:"
+          echo ""
+          echo "  BDEMU_PROFILE=$PROFILE LD_PRELOAD=./libbdemu.so <your-app>"
+          echo ""
+          echo "Example with freemkv:"
+          echo ""
+          echo "  BDEMU_PROFILE=$PROFILE LD_PRELOAD=./libbdemu.so ./freemkv info"
+          SCRIPT
+          chmod +x "$DIR/example.sh"
+          tar czf "${DIR}-x86_64-linux.tar.gz" "$DIR"
 
       - name: Upload
         uses: softprops/action-gh-release@v2
