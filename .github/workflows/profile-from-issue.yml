@@ -16,15 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse issue body
+      - name: Parse issue and extract profile
         id: parse
         uses: actions/github-script@v7
         with:
           script: |
             const body = context.payload.issue.body;
 
-            // Extract fields from code block
-            const codeBlock = body.match(/```([\s\S]*?)```/);
+            const codeBlock = body.match(/```\n([\s\S]*?)```/);
             if (!codeBlock) {
               core.setFailed('No code block found in issue body');
               return;
@@ -39,78 +38,65 @@ jobs:
               }
             }
 
-            console.log('Parsed fields:', JSON.stringify(fields));
-
             if (!fields.manufacturer || !fields.product) {
               core.setFailed('Missing manufacturer or product');
               return;
             }
 
-            // Build profile directory name
             const dirName = `${fields.manufacturer}-${fields.product}`
               .toLowerCase()
               .replace(/[^a-z0-9-]/g, '-')
               .replace(/-+/g, '-')
               .replace(/^-|-$/g, '');
 
+            const b64Match = body.match(/Profile data \(base64 zip\)<\/summary>\s*\n\s*```\n([\s\S]*?)```/);
+            let hasZip = false;
+            if (b64Match) {
+              const b64 = b64Match[1].replace(/\s/g, '');
+              const fs = require('fs');
+              fs.writeFileSync('/tmp/profile.zip', Buffer.from(b64, 'base64'));
+              hasZip = true;
+              console.log('Extracted zip: ' + Buffer.from(b64, 'base64').length + ' bytes');
+            }
+
             core.setOutput('dir_name', dirName);
             core.setOutput('manufacturer', fields.manufacturer || '');
             core.setOutput('product', fields.product || '');
             core.setOutput('revision', fields.revision || '');
-            core.setOutput('serial', fields.serial || '');
-            core.setOutput('firmware_date', fields.firmware_date || '');
             core.setOutput('platform', fields.platform || '');
             core.setOutput('firmware', fields.firmware || '');
-            core.setOutput('bus_encryption', fields.bus_encryption || '');
+            core.setOutput('has_zip', hasZip ? 'true' : 'false');
 
-      - name: Create profile
-        env:
-          DIR_NAME: ${{ steps.parse.outputs.dir_name }}
-          MANUFACTURER: ${{ steps.parse.outputs.manufacturer }}
-          PRODUCT: ${{ steps.parse.outputs.product }}
-          REVISION: ${{ steps.parse.outputs.revision }}
-          SERIAL: ${{ steps.parse.outputs.serial }}
-          FW_DATE: ${{ steps.parse.outputs.firmware_date }}
-          PLATFORM: ${{ steps.parse.outputs.platform }}
-          ISSUE_NUM: ${{ github.event.issue.number }}
+      - name: Create profile from zip
+        if: steps.parse.outputs.has_zip == 'true'
         run: |
-          DIR="profiles/${DIR_NAME}"
+          DIR="profiles/${{ steps.parse.outputs.dir_name }}"
           mkdir -p "$DIR"
-          cat > "$DIR/drive.toml" << EOF
-          # ${MANUFACTURER} ${PRODUCT} ${REVISION}
-          # Created from issue #${ISSUE_NUM}
+          cd "$DIR"
+          unzip -o /tmp/profile.zip
+          echo "Profile extracted:"
+          ls -la
 
-          [drive]
-          manufacturer = "${MANUFACTURER}"
-          product = "${PRODUCT}"
-          revision = "${REVISION}"
-          serial = "${SERIAL}"
-          firmware_date = "${FW_DATE}"
-          platform = "${PLATFORM}"
-          current_profile = 0x0043
-
-          # Stub profile from freemkv info --share.
-          # Binary .bin files can be added for full emulation.
-          EOF
-          echo "Profile created at $DIR"
-          cat "$DIR/drive.toml"
+      - name: Create profile stub
+        if: steps.parse.outputs.has_zip != 'true'
+        run: |
+          DIR="profiles/${{ steps.parse.outputs.dir_name }}"
+          mkdir -p "$DIR"
+          echo "# Stub profile from issue #${{ github.event.issue.number }}" > "$DIR/drive.toml"
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "Add drive profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
+          commit-message: "Add profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
           title: "New profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
           body: |
-            Auto-generated from issue #${{ github.event.issue.number }}.
+            From issue #${{ github.event.issue.number }}.
 
-            **Drive:** ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }} ${{ steps.parse.outputs.revision }}
+            **Drive:** ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}
             **Platform:** ${{ steps.parse.outputs.platform }}
-            **Firmware:** ${{ steps.parse.outputs.firmware }}
+            **Data:** ${{ steps.parse.outputs.has_zip == 'true' && 'Full profile (.bin files)' || 'Stub (text only)' }}
 
             Closes #${{ github.event.issue.number }}
-
-            ---
-            *Created by [profile-from-issue](.github/workflows/profile-from-issue.yml) workflow*
           branch: "profile/${{ steps.parse.outputs.dir_name }}"
           labels: drive-profile
 
@@ -118,9 +104,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const hasZip = '${{ steps.parse.outputs.has_zip }}' === 'true';
+            const type = hasZip ? 'full profile with .bin files' : 'stub profile';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: `Thanks for submitting your drive profile! 🎉\n\nA pull request has been created to add your drive to the profiles database.\n\nDrive: **${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}**\nPlatform: **${{ steps.parse.outputs.platform }}**`
+              body: `Thanks! PR created with ${type}.\n\n**${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}** — ${{ steps.parse.outputs.platform }}`
             });
