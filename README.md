@@ -1,4 +1,5 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/freemkv/bdemu?label=latest&color=brightgreen)](https://github.com/freemkv/bdemu/releases/latest)
 
 # bdemu
 
@@ -6,7 +7,13 @@ Blu-ray drive emulator for development and testing. Intercepts Linux `SG_IO` ioc
 
 Uses [libfreemkv](https://github.com/freemkv/libfreemkv) for unlock signature lookup — the emulated drive responds with correct signatures from the bundled profile database.
 
-Part of the [freemkv](https://github.com/freemkv) project.
+Part of the [freemkv](https://github.com/freemkv) project. **Linux only.**
+
+## Download
+
+[**Download latest release**](https://github.com/freemkv/bdemu/releases/latest) — Linux x86_64 (`bdemu` CLI + `libbdemu.so`).
+
+[Older versions](https://github.com/freemkv/bdemu/releases) · Build from source: `cargo build --release`
 
 ## Quick Start
 
