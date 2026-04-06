@@ -64,35 +64,40 @@ jobs:
             core.setOutput('bus_encryption', fields.bus_encryption || '');
 
       - name: Create profile
+        env:
+          DIR_NAME: ${{ steps.parse.outputs.dir_name }}
+          MANUFACTURER: ${{ steps.parse.outputs.manufacturer }}
+          PRODUCT: ${{ steps.parse.outputs.product }}
+          REVISION: ${{ steps.parse.outputs.revision }}
+          SERIAL: ${{ steps.parse.outputs.serial }}
+          FW_DATE: ${{ steps.parse.outputs.firmware_date }}
+          PLATFORM: ${{ steps.parse.outputs.platform }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
-          DIR="profiles/${{ steps.parse.outputs.dir_name }}"
+          DIR="profiles/${DIR_NAME}"
           mkdir -p "$DIR"
-
-          cat > "$DIR/drive.toml" << 'TOML'
-          # ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }} ${{ steps.parse.outputs.revision }}
-          # Created from issue #${{ github.event.issue.number }}
+          cat > "$DIR/drive.toml" << EOF
+          # ${MANUFACTURER} ${PRODUCT} ${REVISION}
+          # Created from issue #${ISSUE_NUM}
 
           [drive]
-          manufacturer = "${{ steps.parse.outputs.manufacturer }}"
-          product = "${{ steps.parse.outputs.product }}"
-          revision = "${{ steps.parse.outputs.revision }}"
-          serial = "${{ steps.parse.outputs.serial }}"
-          firmware_date = "${{ steps.parse.outputs.firmware_date }}"
-          platform = "${{ steps.parse.outputs.platform }}"
+          manufacturer = "${MANUFACTURER}"
+          product = "${PRODUCT}"
+          revision = "${REVISION}"
+          serial = "${SERIAL}"
+          firmware_date = "${FW_DATE}"
+          platform = "${PLATFORM}"
           current_profile = 0x0043
 
-          # NOTE: This is a stub profile from freemkv info --share.
-          # Binary .bin files need to be added for full emulation.
-          # The drive data above is sufficient for identification.
-          TOML
-
+          # Stub profile from freemkv info --share.
+          # Binary .bin files can be added for full emulation.
+          EOF
           echo "Profile created at $DIR"
-          ls -la "$DIR"
+          cat "$DIR/drive.toml"
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Add drive profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
           title: "New profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
           body: |
@@ -101,6 +106,8 @@ jobs:
             **Drive:** ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }} ${{ steps.parse.outputs.revision }}
             **Platform:** ${{ steps.parse.outputs.platform }}
             **Firmware:** ${{ steps.parse.outputs.firmware }}
+
+            Closes #${{ github.event.issue.number }}
 
             ---
             *Created by [profile-from-issue](.github/workflows/profile-from-issue.yml) workflow*
