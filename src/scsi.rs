@@ -23,23 +23,42 @@ fn log(num: u32, msg: &str) {
 }
 
 /// Look up the unlock signature for this emulated drive using libfreemkv.
-/// Matches the drive's INQUIRY fields against the bundled profile database.
+/// Matches the drive's INQUIRY fields + firmware date against the bundled profile database.
 fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
     use libfreemkv::identity::DriveId;
 
-    // Build DriveId from the emulated drive's INQUIRY
-    let drive_id = DriveId::from_inquiry(&profile.inquiry, "");
+    // Extract firmware date from GET_CONFIG 010C feature data
+    let firmware_date = profile.find_feature(0x010C)
+        .and_then(|data| {
+            // Feature descriptor: [0-1] code, [2] version, [3] addl_len, [4+] data
+            if data.len() > 4 {
+                let date_bytes = &data[4..16.min(data.len())];
+                Some(String::from_utf8_lossy(date_bytes).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    // Build DriveId from the emulated drive's INQUIRY + firmware date
+    let drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
 
     // Search libfreemkv's bundled profiles
     if let Ok(profiles) = libfreemkv::profile::load_bundled() {
         if let Some(matched) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
             if matched.signature != [0; 4] {
+                log(0, &format!("  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
+                    matched.vendor_id.trim(), matched.product_id.trim(),
+                    matched.product_revision.trim(),
+                    matched.signature[0], matched.signature[1],
+                    matched.signature[2], matched.signature[3]));
                 return matched.signature;
             }
         }
+        // No match — log clearly
+        log(0, &format!("  No profile match for: {} (date={})", drive_id, firmware_date));
     }
 
-    // Fallback: zeros (unlock will likely fail but we log it)
     [0; 4]
 }
 
