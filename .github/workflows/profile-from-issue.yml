@@ -43,7 +43,7 @@ jobs:
               return;
             }
 
-            const dirName = `${fields.manufacturer}-${fields.product}`
+            const dirName = `${fields.manufacturer}-${fields.product}-${fields.revision || 'unknown'}-${(fields.firmware || 'unknown').split('/').pop()}`
               .toLowerCase()
               .replace(/[^a-z0-9-]/g, '-')
               .replace(/-+/g, '-')
