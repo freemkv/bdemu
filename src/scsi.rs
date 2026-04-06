@@ -22,6 +22,46 @@ fn log(num: u32, msg: &str) {
     }
 }
 
+/// Look up the unlock signature for this emulated drive using libfreemkv.
+/// Matches the drive's INQUIRY fields + firmware date against the bundled profile database.
+fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
+    use libfreemkv::identity::DriveId;
+
+    // Extract firmware date from GET_CONFIG 010C feature data
+    let firmware_date = profile.find_feature(0x010C)
+        .and_then(|data| {
+            // Feature descriptor: [0-1] code, [2] version, [3] addl_len, [4+] data
+            if data.len() > 4 {
+                let date_bytes = &data[4..16.min(data.len())];
+                Some(String::from_utf8_lossy(date_bytes).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    // Build DriveId from the emulated drive's INQUIRY + firmware date
+    let drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
+
+    // Search libfreemkv's bundled profiles
+    if let Ok(profiles) = libfreemkv::profile::load_bundled() {
+        if let Some(matched) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
+            if matched.signature != [0; 4] {
+                log(0, &format!("  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
+                    matched.vendor_id.trim(), matched.product_id.trim(),
+                    matched.product_revision.trim(),
+                    matched.signature[0], matched.signature[1],
+                    matched.signature[2], matched.signature[3]));
+                return matched.signature;
+            }
+        }
+        // No match — log clearly
+        log(0, &format!("  No profile match for: {} (date={})", drive_id, firmware_date));
+    }
+
+    [0; 4]
+}
+
 fn save_sense(key: u8, asc: u8, ascq: u8) {
     unsafe { LAST_SENSE = [key, asc, ascq]; }
 }
@@ -312,16 +352,20 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                  || (mode == 2 && buf_id == 0x77);
 
     if is_unlock {
-        // TEMP HACK: auto-succeed unlock by returning "MMkv" magic bytes.
-        // Real unlock requires the correct per-drive signature at [0:4].
-        // TODO: integrate libfreemkv to compute correct unlock response
+        // Look up drive signature from libfreemkv bundled profiles.
+        // Match the emulated drive's INQUIRY fields against the profile database.
+        let sig = lookup_unlock_signature(profile);
         let mut resp = vec![0u8; hdr.dxfer_len as usize];
         if resp.len() >= 16 {
+            // Signature at [0:4] from profile database
+            resp[0..4].copy_from_slice(&sig);
+            // "MMkv" at [12:16] — universal verification
             resp[12] = b'M'; resp[13] = b'M'; resp[14] = b'k'; resp[15] = b'v';
         }
         hdr.write_response(&resp);
         unsafe { UNLOCKED = true; }
-        log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> *** UNLOCK (temp hack) ***", mode, buf_id));
+        log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> UNLOCK (sig={:02x}{:02x}{:02x}{:02x})",
+                         mode, buf_id, sig[0], sig[1], sig[2], sig[3]));
         return;
     }
 
