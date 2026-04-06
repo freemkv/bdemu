@@ -1,3 +1,5 @@
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 # bdemu
 
 4K UHD / Blu-ray drive emulator for development and testing. Emulates 4K UHD / BD / DVD / CD optical drives using captured hardware profiles.
