@@ -1,0 +1,119 @@
+name: Create profile from issue
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  create-profile:
+    if: contains(github.event.label.name, 'drive-profile')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse issue body
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body;
+
+            // Extract fields from code block
+            const codeBlock = body.match(/```([\s\S]*?)```/);
+            if (!codeBlock) {
+              core.setFailed('No code block found in issue body');
+              return;
+            }
+
+            const lines = codeBlock[1].trim().split('\n');
+            const fields = {};
+            for (const line of lines) {
+              const match = line.match(/^(\w[\w\s]*?):\s+(.+)$/);
+              if (match) {
+                fields[match[1].trim().toLowerCase().replace(/\s+/g, '_')] = match[2].trim();
+              }
+            }
+
+            console.log('Parsed fields:', JSON.stringify(fields));
+
+            if (!fields.manufacturer || !fields.product) {
+              core.setFailed('Missing manufacturer or product');
+              return;
+            }
+
+            // Build profile directory name
+            const dirName = `${fields.manufacturer}-${fields.product}`
+              .toLowerCase()
+              .replace(/[^a-z0-9-]/g, '-')
+              .replace(/-+/g, '-')
+              .replace(/^-|-$/g, '');
+
+            core.setOutput('dir_name', dirName);
+            core.setOutput('manufacturer', fields.manufacturer || '');
+            core.setOutput('product', fields.product || '');
+            core.setOutput('revision', fields.revision || '');
+            core.setOutput('serial', fields.serial || '');
+            core.setOutput('firmware_date', fields.firmware_date || '');
+            core.setOutput('platform', fields.platform || '');
+            core.setOutput('firmware', fields.firmware || '');
+            core.setOutput('bus_encryption', fields.bus_encryption || '');
+
+      - name: Create profile
+        run: |
+          DIR="profiles/${{ steps.parse.outputs.dir_name }}"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/drive.toml" << 'TOML'
+          # ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }} ${{ steps.parse.outputs.revision }}
+          # Created from issue #${{ github.event.issue.number }}
+
+          [drive]
+          manufacturer = "${{ steps.parse.outputs.manufacturer }}"
+          product = "${{ steps.parse.outputs.product }}"
+          revision = "${{ steps.parse.outputs.revision }}"
+          serial = "${{ steps.parse.outputs.serial }}"
+          firmware_date = "${{ steps.parse.outputs.firmware_date }}"
+          platform = "${{ steps.parse.outputs.platform }}"
+          current_profile = 0x0043
+
+          # NOTE: This is a stub profile from freemkv info --share.
+          # Binary .bin files need to be added for full emulation.
+          # The drive data above is sufficient for identification.
+          TOML
+
+          echo "Profile created at $DIR"
+          ls -la "$DIR"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Add drive profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
+          title: "New profile: ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}"
+          body: |
+            Auto-generated from issue #${{ github.event.issue.number }}.
+
+            **Drive:** ${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }} ${{ steps.parse.outputs.revision }}
+            **Platform:** ${{ steps.parse.outputs.platform }}
+            **Firmware:** ${{ steps.parse.outputs.firmware }}
+
+            ---
+            *Created by [profile-from-issue](.github/workflows/profile-from-issue.yml) workflow*
+          branch: "profile/${{ steps.parse.outputs.dir_name }}"
+          labels: drive-profile
+
+      - name: Comment on issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `Thanks for submitting your drive profile! 🎉\n\nA pull request has been created to add your drive to the profiles database.\n\nDrive: **${{ steps.parse.outputs.manufacturer }} ${{ steps.parse.outputs.product }}**\nPlatform: **${{ steps.parse.outputs.platform }}**`
+            });
