@@ -1,0 +1,28 @@
+[drive]
+manufacturer = "PIONEER"
+product = "BD-RW BDR-S09"
+revision = "1.34"
+serial = "OEDL016822WL"
+firmware_date = "2016-04-25"
+current_profile = 0x0043
+
+[files]
+inquiry = "inquiry.bin"
+rpc_state = "rpc_state.bin"
+mode_2a = "mode_2a.bin"
+
+[features]
+0x0000 = "gc_0000.bin"
+0x0003 = "gc_0003.bin"
+0x001D = "gc_001d.bin"
+0x001E = "gc_001e.bin"
+0x001F = "gc_001f.bin"
+0x0040 = "gc_0040.bin"
+0x0041 = "gc_0041.bin"
+0x0107 = "gc_0107.bin"
+0x0108 = "gc_0108.bin"
+0x010C = "gc_010c.bin"
+0x010D = "gc_010d.bin"
+
+[read_buffer]
+0xF1 = "rb_f1.bin"
