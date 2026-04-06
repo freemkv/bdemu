@@ -22,6 +22,27 @@ fn log(num: u32, msg: &str) {
     }
 }
 
+/// Look up the unlock signature for this emulated drive using libfreemkv.
+/// Matches the drive's INQUIRY fields against the bundled profile database.
+fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
+    use libfreemkv::identity::DriveId;
+
+    // Build DriveId from the emulated drive's INQUIRY
+    let drive_id = DriveId::from_inquiry(&profile.inquiry, "");
+
+    // Search libfreemkv's bundled profiles
+    if let Ok(profiles) = libfreemkv::profile::load_bundled() {
+        if let Some(matched) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
+            if matched.signature != [0; 4] {
+                return matched.signature;
+            }
+        }
+    }
+
+    // Fallback: zeros (unlock will likely fail but we log it)
+    [0; 4]
+}
+
 fn save_sense(key: u8, asc: u8, ascq: u8) {
     unsafe { LAST_SENSE = [key, asc, ascq]; }
 }
@@ -312,18 +333,20 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                  || (mode == 2 && buf_id == 0x77);
 
     if is_unlock {
-        // TEMP HACK: auto-succeed unlock by returning "MMkv" magic bytes.
-        // Real unlock requires the correct per-drive signature at [0:4].
-        // TODO: integrate libfreemkv to compute correct unlock response
-        //       from identity → key lookup → blob decrypt → signature extract.
-        //       For now, zeros at [0:4] + "MMkv" at [12:16] is accepted by MakeMKV.
+        // Look up drive signature from libfreemkv bundled profiles.
+        // Match the emulated drive's INQUIRY fields against the profile database.
+        let sig = lookup_unlock_signature(profile);
         let mut resp = vec![0u8; hdr.dxfer_len as usize];
         if resp.len() >= 16 {
+            // Signature at [0:4] from profile database
+            resp[0..4].copy_from_slice(&sig);
+            // "MMkv" at [12:16] — universal verification
             resp[12] = b'M'; resp[13] = b'M'; resp[14] = b'k'; resp[15] = b'v';
         }
         hdr.write_response(&resp);
         unsafe { UNLOCKED = true; }
-        log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> *** UNLOCK (temp hack) ***", mode, buf_id));
+        log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> UNLOCK (sig={:02x}{:02x}{:02x}{:02x})",
+                         mode, buf_id, sig[0], sig[1], sig[2], sig[3]));
         return;
     }
 
