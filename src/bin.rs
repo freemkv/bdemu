@@ -18,6 +18,85 @@ fn main() {
     }
 
     match args[1].as_str() {
+        "run" => {
+            // bdemu run --profile <dir> [--disc <name>] -- <command> [args...]
+            let mut profile: Option<String> = None;
+            let mut disc: Option<String> = None;
+            let mut cmd_start = 0;
+
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--profile" | "-p" => {
+                        i += 1;
+                        profile = args.get(i).cloned();
+                    }
+                    "--disc" | "-d" => {
+                        i += 1;
+                        disc = args.get(i).cloned();
+                    }
+                    "--" => {
+                        cmd_start = i + 1;
+                        break;
+                    }
+                    _ => {
+                        // First non-flag arg starts the command
+                        cmd_start = i;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+
+            let profile = profile.unwrap_or_else(|| {
+                eprintln!("Error: --profile <dir> is required");
+                eprintln!();
+                eprintln!("Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]");
+                std::process::exit(1);
+            });
+
+            if cmd_start == 0 || cmd_start >= args.len() {
+                eprintln!("Error: no command specified");
+                eprintln!();
+                eprintln!("Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]");
+                eprintln!();
+                eprintln!("Example:");
+                eprintln!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
+                std::process::exit(1);
+            }
+
+            // Find libbdemu.so next to the bdemu binary
+            let exe = std::env::current_exe().unwrap_or_default();
+            let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
+            let lib_path = exe_dir.join("libbdemu.so");
+
+            if !lib_path.exists() {
+                eprintln!("Error: libbdemu.so not found at {}", lib_path.display());
+                eprintln!("Place libbdemu.so next to the bdemu binary.");
+                std::process::exit(1);
+            }
+
+            let cmd = &args[cmd_start];
+            let cmd_args = &args[cmd_start + 1..];
+
+            use std::process::Command;
+            let mut child = Command::new(cmd);
+            child.args(cmd_args);
+            child.env("LD_PRELOAD", &lib_path);
+            child.env("BDEMU_PROFILE", &profile);
+            if let Some(d) = &disc {
+                child.env("BDEMU_DISC", d);
+            }
+
+            match child.status() {
+                Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("Failed to run {}: {}", cmd, e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         "capture-disc" => {
             if args.len() < 4 {
                 eprintln!("Usage: bdemu capture-disc <device> <output_dir> [--sectors N]");
@@ -61,15 +140,19 @@ fn main() {
 }
 
 fn usage() {
-    println!("bdemu — Blu-ray Drive Emulator");
+    println!("bdemu {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("Commands:");
-    println!("  capture-disc <device> <dir> [--sectors N]  Capture disc profile from hardware");
-    println!("  validate <profile_dir>                     Check profile completeness");
+    println!("  run --profile <dir> [--disc <name>] -- <cmd>   Emulate a drive and run a command");
+    println!("  capture-disc <device> <dir> [--sectors N]      Capture disc from real hardware");
+    println!("  validate <profile_dir>                         Check profile completeness");
     println!();
-    println!("Emulation (LD_PRELOAD):");
-    println!("  BDEMU_PROFILE=profiles/bu40n BDEMU_DISC=test_disc \\");
-    println!("    LD_PRELOAD=target/release/libbdemu.so makemkvcon ...");
+    println!("Examples:");
+    println!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
+    println!("  bdemu run --profile profiles/bu40n --disc sample -- ./freemkv rip");
+    println!("  bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/");
+    println!();
+    println!("https://github.com/freemkv/bdemu");
 }
 
 fn validate_profile(dir: &str) {
