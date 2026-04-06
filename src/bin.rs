@@ -168,7 +168,7 @@ fn usage() {
     println!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
     println!("  bdemu run --profile profiles/bu40n --disc sample -- ./freemkv rip");
     println!("  bdemu eject                                    # while running");
-    println!("  bdemu load dune2                               # swap disc");
+    println!("  bdemu load sample2                             # swap disc");
     println!("  bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/");
     println!();
     println!("https://github.com/freemkv/bdemu");
