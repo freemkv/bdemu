@@ -9,19 +9,19 @@ Uses [libfreemkv](https://github.com/freemkv/libfreemkv) for unlock signature lo
 
 ## Download
 
-**Latest: v0.2.0 (2026-04-06)**
+**Latest: v0.2.4 (2026-04-06)**
 
 | Platform | | |
 |----------|-|---|
-| Linux (Intel/AMD) | [**Download**](https://github.com/freemkv/bdemu/releases/download/v0.2.0/bdemu-v0.2.0-x86_64-linux.tar.gz) | Includes bdemu, libbdemu.so, profiles |
+| Linux (Intel/AMD) | [**Download**](https://github.com/freemkv/bdemu/releases/download/v0.2.4/bdemu-v0.2.4-x86_64-linux.tar.gz) | Includes bdemu, libbdemu.so, profiles |
 
 [Older versions](https://github.com/freemkv/bdemu/releases) · Build from source: `cargo build --release`
 
 ## Quick Start
 
 ```bash
-wget -qO- https://github.com/freemkv/bdemu/releases/download/v0.2.0/bdemu-v0.2.0-x86_64-linux.tar.gz | tar xz
-cd bdemu-v0.2.0
+wget -qO- https://github.com/freemkv/bdemu/releases/download/v0.2.4/bdemu-v0.2.4-x86_64-linux.tar.gz | tar xz
+cd bdemu-v0.2.4
 
 # Emulate a BU40N drive and run freemkv against it
 ./bdemu run --profile profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 -- ./freemkv info
@@ -54,7 +54,7 @@ In another terminal, interact with the running emulator:
 ## All Options
 
 ```
-bdemu 0.2.0
+bdemu 0.2.4
 
 Commands:
   run --profile <dir> [--disc <name>] -- <cmd>   Emulate a drive and run a command
