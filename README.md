@@ -71,7 +71,7 @@ Examples:
   bdemu run --profile profiles/bu40n -- ./freemkv info
   bdemu run --profile profiles/bu40n --disc sample -- ./freemkv rip
   bdemu eject                                    # while running
-  bdemu load dune2                               # swap disc
+  bdemu load sample2                             # swap disc
   bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/
 ```
 
