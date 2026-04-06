@@ -129,6 +129,17 @@ fn main() {
             validate_profile(&args[2]);
         }
 
+        "status" => send_control("status"),
+        "eject" => send_control("eject"),
+        "load" => {
+            if args.len() < 3 {
+                eprintln!("Usage: bdemu load <disc_name>");
+                std::process::exit(1);
+            }
+            send_control(&format!("load {}", args[2]));
+        }
+        "list-discs" => send_control("list-discs"),
+
         "--help" | "-h" | "help" => usage(),
 
         _ => {
@@ -147,9 +158,17 @@ fn usage() {
     println!("  capture-disc <device> <dir> [--sectors N]      Capture disc from real hardware");
     println!("  validate <profile_dir>                         Check profile completeness");
     println!();
+    println!("Control (while emulator is running):");
+    println!("  status                                         Show emulator state");
+    println!("  eject                                          Eject the disc");
+    println!("  load <disc_name>                               Load a disc");
+    println!("  list-discs                                     List available discs");
+    println!();
     println!("Examples:");
     println!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
     println!("  bdemu run --profile profiles/bu40n --disc sample -- ./freemkv rip");
+    println!("  bdemu eject                                    # while running");
+    println!("  bdemu load dune2                               # swap disc");
     println!("  bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/");
     println!();
     println!("https://github.com/freemkv/bdemu");
@@ -270,5 +289,26 @@ fn validate_profile(dir: &str) {
         println!("Profile OK ({} warnings)", warnings);
     } else {
         println!("Profile INCOMPLETE — missing required files");
+    }
+}
+
+fn send_control(cmd: &str) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = match UnixStream::connect("/tmp/bdemu.sock") {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("Cannot connect to bdemu. Is the emulator running?");
+            eprintln!("Start with: bdemu run --profile <dir> -- <command>");
+            std::process::exit(1);
+        }
+    };
+
+    writeln!(stream, "{}", cmd).unwrap();
+
+    let reader = BufReader::new(&stream);
+    for line in reader.lines().flatten() {
+        println!("{}", line);
     }
 }
