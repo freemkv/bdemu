@@ -1,6 +1,6 @@
 # bdemu
 
-Blu-ray drive emulator for development and testing. Emulates BD/DVD/CD optical drives using captured hardware profiles.
+4K UHD / Blu-ray drive emulator for development and testing. Emulates 4K UHD / BD / DVD / CD optical drives using captured hardware profiles.
 
 Part of the [freemkv](https://github.com/freemkv) project.
 
