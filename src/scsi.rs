@@ -299,8 +299,20 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
     let mut data = vec![0u8; total];
 
     if let Some(disc) = &profile.disc {
-        // Try sector dump first (LBA-addressable)
-        if !disc.sectors.is_empty() {
+        if !disc.sector_map.is_empty() {
+            // Sparse sector map: look up each requested sector
+            for i in 0..count as usize {
+                let target_lba = lba + i as u32;
+                if let Some(offset) = lookup_sector(&disc.sector_map, &disc.sectors, target_lba) {
+                    let dst = i * sector_size;
+                    data[dst..dst + sector_size].copy_from_slice(
+                        &disc.sectors[offset..offset + sector_size]
+                    );
+                }
+                // Not in map = zeros (already initialized)
+            }
+        } else if !disc.sectors.is_empty() {
+            // Legacy flat dump (LBA = byte offset / 2048)
             let max_sectors = disc.sectors.len() / sector_size;
             for i in 0..count as usize {
                 let sector_lba = lba as usize + i;
@@ -309,10 +321,8 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
                     data[i * sector_size..(i + 1) * sector_size]
                         .copy_from_slice(&disc.sectors[src_start..src_start + sector_size]);
                 }
-                // Beyond dump = zeros (already initialized)
             }
         } else if !disc.sector_data.is_empty() {
-            // Fall back to repeated pattern
             for i in 0..count as usize {
                 let src_len = std::cmp::min(disc.sector_data.len(), sector_size);
                 data[i * sector_size..i * sector_size + src_len]
@@ -323,6 +333,17 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
 
     hdr.write_response(&data);
     log(n, &format!("{} lba={} count={} ({} bytes)", cmd, lba, count, hdr.dxfer_len));
+}
+
+/// Look up a sector in the sparse sector map.
+/// Returns the byte offset into the sectors data, or None if not captured.
+fn lookup_sector(map: &[(u32, u32, usize)], _data: &[u8], lba: u32) -> Option<usize> {
+    for &(start, count, byte_offset) in map {
+        if lba >= start && lba < start + count {
+            return Some(byte_offset + (lba - start) as usize * 2048);
+        }
+    }
+    None
 }
 
 // ============================================================================

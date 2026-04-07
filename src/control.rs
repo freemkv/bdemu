@@ -220,13 +220,17 @@ fn load_disc(dir: &Path) -> crate::profile::DiscProfile {
         }
     }
 
+    let (sectors, sector_map) = crate::profile::parse_sector_file(
+        std::fs::read(dir.join("sectors.bin")).unwrap_or_default()
+    );
     crate::profile::DiscProfile {
         toc: std::fs::read(dir.join("toc.bin")).unwrap_or_default(),
         capacity: std::fs::read(dir.join("capacity.bin")).unwrap_or_default(),
         disc_info: std::fs::read(dir.join("disc_info.bin")).unwrap_or_default(),
         disc_structures,
         sector_data: std::fs::read(dir.join("sector_data.bin")).unwrap_or_default(),
-        sectors: std::fs::read(dir.join("sectors.bin")).unwrap_or_default(),
+        sectors,
+        sector_map,
     }
 }
 
