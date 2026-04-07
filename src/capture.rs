@@ -1,120 +1,144 @@
 // bdemu — Blu-ray Drive Emulator
 // AGPL-3.0 — freemkv project
 //
-// Disc profile capture — reads disc data from real hardware
+// Smart disc capture — uses libfreemkv to open/unlock the drive,
+// parses UDF to find metadata locations, captures 0 → max_metadata + 1000.
+// Result: flat sectors.bin that bdemu serves as a virtual disc.
 
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::Write;
 use std::path::Path;
+use libfreemkv::{DriveSession, scsi};
 
-pub fn capture_disc(device: &str, output_dir: &str, sector_count: usize) -> io::Result<()> {
+const SECTOR_SIZE: usize = 2048;
+const PADDING_SECTORS: u32 = 1000;
+/// Ranges below this LBA are metadata. Above = video region outliers.
+const METADATA_CUTOFF: u32 = 500_000;
+
+pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Result<(), String> {
     let dir = Path::new(output_dir);
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(dir).map_err(|e| format!("create dir: {}", e))?;
 
     println!("Capturing disc from {} -> {}/", device, output_dir);
     println!();
 
-    // Open the device for SG_IO commands
-    let sg_dev = super::scsi_probe::ScsiDevice::open(device)?;
+    let dev_path = Path::new(device);
+    let mut session = DriveSession::open(dev_path)
+        .map_err(|e| format!("open drive: {}", e))?;
 
-    // READ_CAPACITY
-    print!("  READ_CAPACITY... ");
-    if let Some(data) = sg_dev.command(&[0x25, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 8) {
-        fs::write(dir.join("capacity.bin"), &data)?;
-        let lba = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let blk = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-        println!("{} sectors, {} bytes/sector", lba + 1, blk);
-    } else {
-        println!("failed");
-    }
+    println!("  Drive: {} {} {}",
+        session.drive_id.vendor_id.trim(),
+        session.drive_id.product_id.trim(),
+        session.drive_id.product_revision.trim());
+    println!("  Unlocked: {}", session.is_unlocked());
 
-    // READ_TOC
-    print!("  READ_TOC... ");
-    if let Some(data) = sg_dev.command(&[0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00], 4096) {
-        fs::write(dir.join("toc.bin"), &data)?;
-        println!("{} bytes", data.len());
-    } else {
-        println!("failed");
-    }
-
-    // READ_DISC_INFO
-    print!("  READ_DISC_INFO... ");
-    if let Some(data) = sg_dev.command(&[0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00], 256) {
-        fs::write(dir.join("disc_info.bin"), &data)?;
-        println!("{} bytes", data.len());
-    } else {
-        println!("failed");
-    }
-
-    // READ_DISC_STRUCTURE — try common formats
-    let formats: &[(u8, &str)] = &[
-        (0x00, "PFI"),
-        (0x01, "DI"),
-        (0x03, "BCA"),
-        (0x0E, "Copyright"),
-        (0x0F, "Copyright"),
-    ];
-    for (fmt, name) in formats {
-        print!("  DISC_STRUCTURE format {} ({})... ", fmt, name);
-        let cdb = [0xAD, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, *fmt, 0x10, 0x04, 0x00, 0x00];
-        if let Some(data) = sg_dev.command(&cdb, 4100) {
-            let fname = format!("ds_{:02x}.bin", fmt);
-            fs::write(dir.join(&fname), &data)?;
-            println!("{} bytes", data.len());
-        } else {
-            println!("not available");
-        }
-    }
-
-    // Sector dump — read from block device
+    // SCSI metadata
     println!();
-    println!("  Reading {} sectors ({:.1} MB)...",
-             sector_count, sector_count as f64 * 2048.0 / 1_000_000.0);
+    let cap_data = scsi_save(&mut session, dir, "capacity.bin", "READ_CAPACITY",
+        &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
+    let disc_capacity = cap_data.map(|d|
+        u32::from_be_bytes([d[0], d[1], d[2], d[3]]) + 1
+    ).unwrap_or(0);
 
-    // Use the block device (sr0) not sg device for bulk reads
-    let sr_device = device.replace("sg", "sr");
-    let sr_path = if Path::new(&sr_device).exists() {
-        sr_device
+    scsi_save(&mut session, dir, "toc.bin", "READ_TOC",
+        &[0x43, 0, 0, 0, 0, 0, 0, 0x10, 0, 0], 4096);
+    scsi_save(&mut session, dir, "disc_info.bin", "READ_DISC_INFO",
+        &[0x51, 0, 0, 0, 0, 0, 0, 0x01, 0, 0], 256);
+    for (fmt, name) in &[(0x00u8,"PFI"),(0x01,"DI"),(0x03,"BCA"),(0x0E,"CR"),(0x0F,"CR")] {
+        let cdb = [0xAD, 0x01, 0, 0, 0, 0, 0, *fmt, 0x10, 0x04, 0, 0];
+        scsi_save(&mut session, dir, &format!("ds_{:02x}.bin", fmt),
+            &format!("DISC_STRUCTURE 0x{:02X} ({})", fmt, name), &cdb, 4100);
+    }
+
+    // Determine sector count
+    println!();
+    let sector_count = if manual_sectors > 0 {
+        println!("  Manual: {} sectors", manual_sectors);
+        manual_sectors as u32
     } else {
-        // Fall back: find /dev/sr* that matches
-        let mut found = String::new();
-        for i in 0..16 {
-            let p = format!("/dev/sr{}", i);
-            if Path::new(&p).exists() {
-                found = p;
-                break;
+        print!("  Parsing UDF... ");
+        let udf = libfreemkv::udf::read_filesystem(&mut session)
+            .map_err(|e| format!("UDF: {}", e))?;
+        println!("done");
+
+        print!("  Finding metadata extent... ");
+        let ranges = udf.metadata_sector_ranges(&mut session)
+            .map_err(|e| format!("ranges: {}", e))?;
+
+        // Max of all ranges in the metadata region (< 500K sectors)
+        let max_end = ranges.iter()
+            .filter(|(start, _)| *start < METADATA_CUTOFF)
+            .map(|(start, count)| start + count)
+            .max()
+            .unwrap_or(10000);
+
+        let count = (max_end + PADDING_SECTORS).min(disc_capacity);
+        println!("sector {} + {} = {}", max_end, PADDING_SECTORS, count);
+        println!("  Capture size: {:.1} MB", count as f64 * SECTOR_SIZE as f64 / 1e6);
+
+        // Report skipped outliers
+        let skipped: Vec<_> = ranges.iter()
+            .filter(|(start, _)| *start >= METADATA_CUTOFF)
+            .collect();
+        if !skipped.is_empty() {
+            println!("  Skipping {} high-LBA ranges (Content*.cer, JAR PNGs — AACS 2.0 future):", skipped.len());
+            for (s, c) in &skipped {
+                println!("    LBA {}-{} ({} sectors)", s, s+c, c);
             }
         }
-        if found.is_empty() {
-            eprintln!("  Cannot find block device for sector reads");
-            eprintln!("  Skipping sector dump");
-            return Ok(());
-        }
-        found
+        count
     };
 
-    let mut file = fs::File::open(&sr_path)?;
-    let sector_size = 2048;
-    let total_bytes = sector_count * sector_size;
-    let mut buf = vec![0u8; total_bytes];
-
-    let bytes_read = file.read(&mut buf)?;
-    buf.truncate(bytes_read);
-
-    let sectors_read = bytes_read / sector_size;
-    fs::write(dir.join("sectors.bin"), &buf)?;
-    println!("  Read {} sectors ({:.1} MB) -> sectors.bin",
-             sectors_read, bytes_read as f64 / 1_000_000.0);
-
+    // Read sectors — incremental write
     println!();
-    println!("Disc profile saved to {}/", output_dir);
-    println!("Files:");
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let meta = entry.metadata()?;
-            println!("  {}: {} bytes", entry.file_name().to_string_lossy(), meta.len());
+    let mut file = fs::File::create(dir.join("sectors.bin"))
+        .map_err(|e| format!("create: {}", e))?;
+    let chunk: u16 = 32;
+    let mut lba: u32 = 0;
+    let mut errors: u32 = 0;
+
+    while lba < sector_count {
+        let n = ((sector_count - lba) as u16).min(chunk);
+        let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
+
+        if let Err(e) = session.read_disc(lba, n, &mut buf) {
+            errors += 1;
+            if errors <= 3 {
+                eprintln!("\n  Read error at LBA {}: {}", lba, e);
+            }
+        }
+        file.write_all(&buf).map_err(|e| format!("write: {}", e))?;
+        lba += n as u32;
+
+        if lba % 5000 == 0 || lba >= sector_count {
+            eprint!("\r  Reading: {} / {} sectors ({:.0}%)",
+                lba, sector_count, lba as f64 / sector_count as f64 * 100.0);
         }
     }
+    eprintln!();
+    file.flush().map_err(|e| format!("flush: {}", e))?;
 
+    if errors > 0 {
+        println!("  {} read errors (zero-filled)", errors);
+    }
+    println!("  Saved {:.1} MB", sector_count as f64 * SECTOR_SIZE as f64 / 1e6);
+    println!();
+    println!("Capture complete: {}/", output_dir);
     Ok(())
+}
+
+fn scsi_save(session: &mut DriveSession, dir: &Path, file: &str, label: &str,
+    cdb: &[u8], size: usize) -> Option<Vec<u8>>
+{
+    print!("  {}... ", label);
+    let mut buf = vec![0u8; size];
+    match session.scsi_execute(cdb, scsi::DataDirection::FromDevice, &mut buf, 5000) {
+        Ok(r) => {
+            let data = buf[..r.bytes_transferred].to_vec();
+            let _ = fs::write(dir.join(file), &data);
+            println!("{} bytes", r.bytes_transferred);
+            Some(data)
+        }
+        Err(_) => { println!("n/a"); None }
+    }
 }

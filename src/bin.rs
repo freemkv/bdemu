@@ -99,17 +99,17 @@ fn main() {
 
         "capture-disc" => {
             if args.len() < 4 {
-                eprintln!("Usage: bdemu capture-disc <device> <output_dir> [--sectors N]");
+                eprintln!("Usage: bdemu capture-disc <device> <output_dir> [--keydb <path>] [--sectors N]");
                 std::process::exit(1);
             }
             let device = &args[2];
             let output = &args[3];
-            let mut sectors = 10000; // default 20MB
+            let mut sectors: usize = 0; // 0 = auto-discover from UDF
 
             let mut i = 4;
             while i < args.len() {
                 if args[i] == "--sectors" && i + 1 < args.len() {
-                    sectors = args[i + 1].parse().unwrap_or(10000);
+                    sectors = args[i + 1].parse().unwrap_or(0);
                     i += 1;
                 }
                 i += 1;

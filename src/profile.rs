@@ -26,7 +26,43 @@ pub struct DiscProfile {
     pub disc_info: Vec<u8>,
     pub disc_structures: HashMap<u8, Vec<u8>>,  // format_code -> data
     pub sector_data: Vec<u8>,  // single sector pattern (repeated)
-    pub sectors: Vec<u8>,      // full sector dump (LBA-addressable, 2048 per sector)
+    pub sectors: Vec<u8>,      // sector data (flat or sparse)
+    pub sector_map: Vec<(u32, u32, usize)>, // (start_lba, count, byte_offset) — empty = flat
+}
+
+/// Sector map file format:
+///   Magic: "BDSM" (4 bytes)
+///   Version: u32 LE (1)
+///   Num_ranges: u32 LE
+///   Ranges: [start_lba(u32 LE), sector_count(u32 LE)] × num_ranges
+///   Sector data: contiguous, in range order
+///
+/// If magic is NOT "BDSM", the file is a flat sector dump (legacy, LBA = offset/2048).
+pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
+    if data.len() >= 12 && &data[0..4] == b"BDSM" {
+        let _version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let num_ranges = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+
+        let header_size = 12 + num_ranges * 8;
+        if data.len() < header_size {
+            return (data, Vec::new()); // corrupt, treat as flat
+        }
+
+        let mut map = Vec::with_capacity(num_ranges);
+        let mut data_offset = header_size;
+        for i in 0..num_ranges {
+            let off = 12 + i * 8;
+            let start_lba = u32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]]);
+            let count = u32::from_le_bytes([data[off+4], data[off+5], data[off+6], data[off+7]]);
+            map.push((start_lba, count, data_offset));
+            data_offset += count as usize * 2048;
+        }
+
+        (data, map)
+    } else {
+        // Legacy flat format
+        (data, Vec::new())
+    }
 }
 
 impl LoadedProfile {
@@ -165,13 +201,17 @@ impl LoadedProfile {
                         }
                     }
                 }
+                let (sectors, sector_map) = parse_sector_file(
+                    read_bin(&disc_dir.join("sectors.bin"))
+                );
                 Some(DiscProfile {
                     toc: read_bin(&disc_dir.join("toc.bin")),
                     capacity: read_bin(&disc_dir.join("capacity.bin")),
                     disc_info: read_bin(&disc_dir.join("disc_info.bin")),
                     disc_structures,
                     sector_data: read_bin(&disc_dir.join("sector_data.bin")),
-                    sectors: read_bin(&disc_dir.join("sectors.bin")),
+                    sectors,
+                    sector_map,
                 })
             } else {
                 None
