@@ -12,7 +12,7 @@ use libfreemkv::{DriveSession, scsi};
 
 const SECTOR_SIZE: usize = 2048;
 
-pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Result<(), String> {
+pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
     let dir = Path::new(output_dir);
     fs::create_dir_all(dir).map_err(|e| format!("create dir: {}", e))?;
 
@@ -30,12 +30,8 @@ pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Re
 
     // SCSI metadata
     println!();
-    let cap_data = scsi_save(&mut session, dir, "capacity.bin", "READ_CAPACITY",
+    scsi_save(&mut session, dir, "capacity.bin", "READ_CAPACITY",
         &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
-    let _disc_capacity = cap_data.map(|d|
-        u32::from_be_bytes([d[0], d[1], d[2], d[3]]) + 1
-    ).unwrap_or(0);
-
     scsi_save(&mut session, dir, "toc.bin", "READ_TOC",
         &[0x43, 0, 0, 0, 0, 0, 0, 0x10, 0, 0], 4096);
     scsi_save(&mut session, dir, "disc_info.bin", "READ_DISC_INFO",
@@ -46,53 +42,39 @@ pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Re
             &format!("DISC_STRUCTURE 0x{:02X} ({})", fmt, name), &cdb, 4100);
     }
 
+    // Parse UDF, discover metadata ranges
     println!();
-    if manual_sectors > 0 {
-        println!("  Manual: {} sectors", manual_sectors);
-        capture_flat(&mut session, dir, manual_sectors as u32)?;
-    } else {
-        print!("  Parsing UDF... ");
-        let udf = libfreemkv::udf::read_filesystem(&mut session)
-            .map_err(|e| format!("UDF: {}", e))?;
-        println!("done");
+    print!("  Parsing UDF... ");
+    let udf = libfreemkv::udf::read_filesystem(&mut session)
+        .map_err(|e| format!("UDF: {}", e))?;
+    println!("done");
 
-        print!("  Discovering metadata ranges... ");
-        let ranges = udf.metadata_sector_ranges(&mut session)
-            .map_err(|e| format!("ranges: {}", e))?;
+    print!("  Discovering metadata ranges... ");
+    let ranges = udf.metadata_sector_ranges(&mut session)
+        .map_err(|e| format!("ranges: {}", e))?;
 
-        let total: u32 = ranges.iter().map(|r| r.1).sum();
-        println!("{} ranges, {} sectors ({:.1} MB)",
-            ranges.len(), total, total as f64 * SECTOR_SIZE as f64 / 1e6);
-        for (i, (s, c)) in ranges.iter().enumerate() {
-            println!("    range {}: LBA {}-{} ({} sectors)", i, s, s+c, c);
-        }
-
-        capture_sparse(&mut session, dir, &ranges)?;
+    let total: u32 = ranges.iter().map(|r| r.1).sum();
+    println!("{} ranges, {} sectors ({:.1} MB)",
+        ranges.len(), total, total as f64 * SECTOR_SIZE as f64 / 1e6);
+    for (i, (s, c)) in ranges.iter().enumerate() {
+        println!("    range {}: LBA {}-{} ({} sectors)", i, s, s+c, c);
     }
 
+    // Write BDSM sparse sector map
     println!();
-    println!("Capture complete: {}/", output_dir);
-    Ok(())
-}
-
-/// Write sparse BDSM sector map.
-fn capture_sparse(session: &mut DriveSession, dir: &Path, ranges: &[(u32, u32)]) -> Result<(), String> {
-    let total: u32 = ranges.iter().map(|r| r.1).sum();
-
     let mut file = fs::File::create(dir.join("sectors.bin"))
         .map_err(|e| format!("create: {}", e))?;
 
-    // Header: magic + version + num_ranges + range table
+    // Header
     file.write_all(b"BDSM").map_err(|e| format!("write: {}", e))?;
     file.write_all(&1u32.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
     file.write_all(&(ranges.len() as u32).to_le_bytes()).map_err(|e| format!("write: {}", e))?;
-    for (start, count) in ranges {
+    for (start, count) in &ranges {
         file.write_all(&start.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
         file.write_all(&count.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
     }
 
-    // Sector data per range
-    println!();
+    // Read and write each range
     let chunk: u16 = 32;
     let mut done: u32 = 0;
     let mut errors: u32 = 0;
@@ -127,28 +109,12 @@ fn capture_sparse(session: &mut DriveSession, dir: &Path, ranges: &[(u32, u32)])
     if errors > 0 {
         println!("  {} read errors (zero-filled)", errors);
     }
+    let file_size = 12 + ranges.len() * 8 + total as usize * SECTOR_SIZE;
     println!("  Saved {} sectors ({:.1} MB) in {} ranges",
-        total, (12 + ranges.len() * 8 + total as usize * SECTOR_SIZE) as f64 / 1e6,
-        ranges.len());
-    Ok(())
-}
+        total, file_size as f64 / 1e6, ranges.len());
 
-/// Flat 0→N capture (legacy, for --sectors override).
-fn capture_flat(session: &mut DriveSession, dir: &Path, count: u32) -> Result<(), String> {
-    let mut file = fs::File::create(dir.join("sectors.bin"))
-        .map_err(|e| format!("create: {}", e))?;
-    let chunk: u16 = 32;
-    let mut lba: u32 = 0;
-
-    while lba < count {
-        let n = ((count - lba) as u16).min(chunk);
-        let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
-        let _ = session.read_disc(lba, n, &mut buf);
-        file.write_all(&buf).map_err(|e| format!("write: {}", e))?;
-        lba += n as u32;
-    }
-    file.flush().map_err(|e| format!("flush: {}", e))?;
-    println!("  Saved {} sectors ({:.1} MB)", count, count as f64 * SECTOR_SIZE as f64 / 1e6);
+    println!();
+    println!("Capture complete: {}/", output_dir);
     Ok(())
 }
 
