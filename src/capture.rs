@@ -2,8 +2,8 @@
 // AGPL-3.0 — freemkv project
 //
 // Smart disc capture — uses libfreemkv to open/unlock the drive,
-// parses UDF to find metadata locations, captures 0 → max_metadata + 1000.
-// Result: flat sectors.bin that bdemu serves as a virtual disc.
+// parses UDF to find metadata sector ranges, writes sparse BDSM format.
+// Only captures sectors disc-info needs (~5MB per disc).
 
 use std::fs;
 use std::io::Write;
@@ -11,9 +11,6 @@ use std::path::Path;
 use libfreemkv::{DriveSession, scsi};
 
 const SECTOR_SIZE: usize = 2048;
-const PADDING_SECTORS: u32 = 1000;
-/// Ranges below this LBA are metadata. Above = video region outliers.
-const METADATA_CUTOFF: u32 = 500_000;
 
 pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Result<(), String> {
     let dir = Path::new(output_dir);
@@ -30,13 +27,12 @@ pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Re
         session.drive_id.vendor_id.trim(),
         session.drive_id.product_id.trim(),
         session.drive_id.product_revision.trim());
-    println!("  Unlocked: {}", session.is_unlocked());
 
     // SCSI metadata
     println!();
     let cap_data = scsi_save(&mut session, dir, "capacity.bin", "READ_CAPACITY",
         &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
-    let disc_capacity = cap_data.map(|d|
+    let _disc_capacity = cap_data.map(|d|
         u32::from_be_bytes([d[0], d[1], d[2], d[3]]) + 1
     ).unwrap_or(0);
 
@@ -50,69 +46,79 @@ pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Re
             &format!("DISC_STRUCTURE 0x{:02X} ({})", fmt, name), &cdb, 4100);
     }
 
-    // Determine sector count
     println!();
-    let sector_count = if manual_sectors > 0 {
+    if manual_sectors > 0 {
         println!("  Manual: {} sectors", manual_sectors);
-        manual_sectors as u32
+        capture_flat(&mut session, dir, manual_sectors as u32)?;
     } else {
         print!("  Parsing UDF... ");
         let udf = libfreemkv::udf::read_filesystem(&mut session)
             .map_err(|e| format!("UDF: {}", e))?;
         println!("done");
 
-        print!("  Finding metadata extent... ");
+        print!("  Discovering metadata ranges... ");
         let ranges = udf.metadata_sector_ranges(&mut session)
             .map_err(|e| format!("ranges: {}", e))?;
 
-        // Max of all ranges in the metadata region (< 500K sectors)
-        let max_end = ranges.iter()
-            .filter(|(start, _)| *start < METADATA_CUTOFF)
-            .map(|(start, count)| start + count)
-            .max()
-            .unwrap_or(10000);
-
-        let count = (max_end + PADDING_SECTORS).min(disc_capacity);
-        println!("sector {} + {} = {}", max_end, PADDING_SECTORS, count);
-        println!("  Capture size: {:.1} MB", count as f64 * SECTOR_SIZE as f64 / 1e6);
-
-        // Report skipped outliers
-        let skipped: Vec<_> = ranges.iter()
-            .filter(|(start, _)| *start >= METADATA_CUTOFF)
-            .collect();
-        if !skipped.is_empty() {
-            println!("  Skipping {} high-LBA ranges (Content*.cer, JAR PNGs — AACS 2.0 future):", skipped.len());
-            for (s, c) in &skipped {
-                println!("    LBA {}-{} ({} sectors)", s, s+c, c);
-            }
+        let total: u32 = ranges.iter().map(|r| r.1).sum();
+        println!("{} ranges, {} sectors ({:.1} MB)",
+            ranges.len(), total, total as f64 * SECTOR_SIZE as f64 / 1e6);
+        for (i, (s, c)) in ranges.iter().enumerate() {
+            println!("    range {}: LBA {}-{} ({} sectors)", i, s, s+c, c);
         }
-        count
-    };
 
-    // Read sectors — incremental write
+        capture_sparse(&mut session, dir, &ranges)?;
+    }
+
     println!();
+    println!("Capture complete: {}/", output_dir);
+    Ok(())
+}
+
+/// Write sparse BDSM sector map.
+fn capture_sparse(session: &mut DriveSession, dir: &Path, ranges: &[(u32, u32)]) -> Result<(), String> {
+    let total: u32 = ranges.iter().map(|r| r.1).sum();
+
     let mut file = fs::File::create(dir.join("sectors.bin"))
         .map_err(|e| format!("create: {}", e))?;
+
+    // Header: magic + version + num_ranges + range table
+    file.write_all(b"BDSM").map_err(|e| format!("write: {}", e))?;
+    file.write_all(&1u32.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
+    file.write_all(&(ranges.len() as u32).to_le_bytes()).map_err(|e| format!("write: {}", e))?;
+    for (start, count) in ranges {
+        file.write_all(&start.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
+        file.write_all(&count.to_le_bytes()).map_err(|e| format!("write: {}", e))?;
+    }
+
+    // Sector data per range
+    println!();
     let chunk: u16 = 32;
-    let mut lba: u32 = 0;
+    let mut done: u32 = 0;
     let mut errors: u32 = 0;
 
-    while lba < sector_count {
-        let n = ((sector_count - lba) as u16).min(chunk);
-        let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
+    for (ri, (start, count)) in ranges.iter().enumerate() {
+        let mut lba = *start;
+        let end = start + count;
 
-        if let Err(e) = session.read_disc(lba, n, &mut buf) {
-            errors += 1;
-            if errors <= 3 {
-                eprintln!("\n  Read error at LBA {}: {}", lba, e);
+        while lba < end {
+            let n = ((end - lba) as u16).min(chunk);
+            let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
+
+            if let Err(e) = session.read_disc(lba, n, &mut buf) {
+                errors += 1;
+                if errors <= 3 {
+                    eprintln!("\n  Read error at LBA {}: {}", lba, e);
+                }
             }
-        }
-        file.write_all(&buf).map_err(|e| format!("write: {}", e))?;
-        lba += n as u32;
+            file.write_all(&buf).map_err(|e| format!("write: {}", e))?;
+            lba += n as u32;
+            done += n as u32;
 
-        if lba % 5000 == 0 || lba >= sector_count {
-            eprint!("\r  Reading: {} / {} sectors ({:.0}%)",
-                lba, sector_count, lba as f64 / sector_count as f64 * 100.0);
+            if done % 500 == 0 || done >= total {
+                eprint!("\r  Reading: {} / {} sectors (range {}/{})",
+                    done, total, ri + 1, ranges.len());
+            }
         }
     }
     eprintln!();
@@ -121,13 +127,32 @@ pub fn capture_disc(device: &str, output_dir: &str, manual_sectors: usize) -> Re
     if errors > 0 {
         println!("  {} read errors (zero-filled)", errors);
     }
-    println!("  Saved {:.1} MB", sector_count as f64 * SECTOR_SIZE as f64 / 1e6);
-    println!();
-    println!("Capture complete: {}/", output_dir);
+    println!("  Saved {} sectors ({:.1} MB) in {} ranges",
+        total, (12 + ranges.len() * 8 + total as usize * SECTOR_SIZE) as f64 / 1e6,
+        ranges.len());
     Ok(())
 }
 
-fn scsi_save(session: &mut DriveSession, dir: &Path, file: &str, label: &str,
+/// Flat 0→N capture (legacy, for --sectors override).
+fn capture_flat(session: &mut DriveSession, dir: &Path, count: u32) -> Result<(), String> {
+    let mut file = fs::File::create(dir.join("sectors.bin"))
+        .map_err(|e| format!("create: {}", e))?;
+    let chunk: u16 = 32;
+    let mut lba: u32 = 0;
+
+    while lba < count {
+        let n = ((count - lba) as u16).min(chunk);
+        let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
+        let _ = session.read_disc(lba, n, &mut buf);
+        file.write_all(&buf).map_err(|e| format!("write: {}", e))?;
+        lba += n as u32;
+    }
+    file.flush().map_err(|e| format!("flush: {}", e))?;
+    println!("  Saved {} sectors ({:.1} MB)", count, count as f64 * SECTOR_SIZE as f64 / 1e6);
+    Ok(())
+}
+
+fn scsi_save(session: &mut DriveSession, dir: &Path, filename: &str, label: &str,
     cdb: &[u8], size: usize) -> Option<Vec<u8>>
 {
     print!("  {}... ", label);
@@ -135,7 +160,7 @@ fn scsi_save(session: &mut DriveSession, dir: &Path, file: &str, label: &str,
     match session.scsi_execute(cdb, scsi::DataDirection::FromDevice, &mut buf, 5000) {
         Ok(r) => {
             let data = buf[..r.bytes_transferred].to_vec();
-            let _ = fs::write(dir.join(file), &data);
+            let _ = fs::write(dir.join(filename), &data);
             println!("{} bytes", r.bytes_transferred);
             Some(data)
         }
