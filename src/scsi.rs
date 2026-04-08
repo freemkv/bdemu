@@ -363,9 +363,6 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
 // Mode 2: data — vendor-specific buffer data
 // Mode 3: descriptor — buffer capacity info
 
-// Track unlock state
-static mut UNLOCKED: bool = false;
-
 fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let mode = hdr.cdb(1) & 0x1F;
     let buf_id = hdr.cdb(2);
@@ -389,7 +386,6 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             resp[12] = b'M'; resp[13] = b'M'; resp[14] = b'k'; resp[15] = b'v';
         }
         hdr.write_response(&resp);
-        unsafe { UNLOCKED = true; }
         log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> UNLOCK (sig={:02x}{:02x}{:02x}{:02x})",
                          mode, buf_id, sig[0], sig[1], sig[2], sig[3]));
         return;

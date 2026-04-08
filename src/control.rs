@@ -6,7 +6,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub const SOCKET_PATH: &str = "/tmp/bdemu.sock";
@@ -159,7 +159,7 @@ fn cmd_load(
     drop(st);
 
     // Load disc data
-    let disc = load_disc(&disc_dir);
+    let disc = crate::profile::load_disc(&disc_dir);
 
     let mut prof = profile.lock().unwrap();
     let mut st = state.lock().unwrap();
@@ -199,38 +199,5 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
     }
 
     Response::multi(lines)
-}
-
-fn load_disc(dir: &Path) -> crate::profile::DiscProfile {
-    use std::collections::HashMap;
-
-    let mut disc_structures = HashMap::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let fname = entry.file_name().to_string_lossy().to_string();
-            if fname.starts_with("ds_") && fname.ends_with(".bin") {
-                let fmt_str = &fname[3..fname.len() - 4];
-                if let Ok(fmt) = u8::from_str_radix(fmt_str, 16) {
-                    let data = std::fs::read(entry.path()).unwrap_or_default();
-                    if !data.is_empty() {
-                        disc_structures.insert(fmt, data);
-                    }
-                }
-            }
-        }
-    }
-
-    let (sectors, sector_map) = crate::profile::parse_sector_file(
-        std::fs::read(dir.join("sectors.bin")).unwrap_or_default()
-    );
-    crate::profile::DiscProfile {
-        toc: std::fs::read(dir.join("toc.bin")).unwrap_or_default(),
-        capacity: std::fs::read(dir.join("capacity.bin")).unwrap_or_default(),
-        disc_info: std::fs::read(dir.join("disc_info.bin")).unwrap_or_default(),
-        disc_structures,
-        sector_data: std::fs::read(dir.join("sector_data.bin")).unwrap_or_default(),
-        sectors,
-        sector_map,
-    }
 }
 
