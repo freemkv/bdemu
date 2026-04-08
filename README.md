@@ -16,18 +16,21 @@ Or build from source: `cargo build --release`
 ## Quick Start
 
 ```bash
-# Emulate a drive and run freemkv against it
-./bdemu run --profile profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 -- ./freemkv drive-info
+# Capture a disc (auto-names, auto-ejects)
+bdemu capture-disc /dev/sr0 ./testbed/disc
+
+# Emulate a drive and scan the captured disc
+bdemu run --profile profiles/bu40n --disc my_movie -- freemkv disc-info
 ```
 
 ## Commands
 
 ```
-bdemu <command>
+bdemu 0.3.0
 
-Emulation:
-  run --profile <dir> [--disc <name>] -- <cmd>   Emulate a drive and run a command
-  capture-disc <device> <dir> [--sectors N]      Capture disc from real hardware
+Commands:
+  run --profile <dir> [--disc <name>] -- <cmd>   Emulate drive, run command
+  capture-disc <device> <output_dir>             Smart capture from hardware
   validate <profile_dir>                         Check profile completeness
 
 Control (while emulator is running):
@@ -35,36 +38,49 @@ Control (while emulator is running):
   eject                                          Eject the disc
   load <disc_name>                               Load a disc
   list-discs                                     List available discs
+
+Examples:
+  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names, ejects
+  bdemu run -p profiles/bu40n -d sample -- ./freemkv disc-info
+  bdemu validate profiles/bu40n/
 ```
+
+## Smart Capture
+
+`capture-disc` uses libfreemkv to parse the disc's UDF filesystem and capture only the sectors needed for emulation. A typical capture is 15-80 MB instead of 25-90 GB.
+
+After capture, the output directory is automatically renamed to the disc's volume ID (e.g. `disc` becomes `dune__part_two`). If the name already exists, a number is appended (`dune__part_two_2`).
+
+The disc tray ejects automatically when capture completes.
 
 ## Creating Profiles
 
 ### From real hardware
 
 ```bash
-# Capture drive profile
+# Capture drive identity (one-time per drive)
 freemkv drive-info --share profiles/my-drive/
 
-# Capture a disc
-bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/ --sectors 50000
+# Capture discs (repeat for each disc)
+bdemu capture-disc /dev/sr0 profiles/my-drive/discs/disc
 ```
 
 ## Profile Structure
 
 ```
 profiles/my-drive/
-├── drive.toml           # Drive metadata
-├── inquiry.bin          # INQUIRY response (96 bytes)
-├── gc_*.bin             # GET_CONFIG features
-├── rpc_state.bin        # REPORT KEY RPC state
-├── mode_2a.bin          # MODE SENSE page 2A
-└── discs/
-    └── my-disc/
-        ├── toc.bin      # READ TOC response
-        ├── capacity.bin # READ CAPACITY response
-        ├── disc_info.bin
-        ├── ds_00.bin    # READ DISC STRUCTURE
-        └── sectors.bin  # Sector dump (2048 bytes/sector)
++-- drive.toml           # Drive metadata
++-- inquiry.bin          # INQUIRY response (96 bytes)
++-- gc_*.bin             # GET_CONFIG features
++-- rpc_state.bin        # REPORT KEY RPC state
++-- mode_2a.bin          # MODE SENSE page 2A
++-- discs/
+    +-- my-disc/
+        +-- toc.bin      # READ TOC response
+        +-- capacity.bin # READ CAPACITY response
+        +-- disc_info.bin
+        +-- ds_00.bin    # READ DISC STRUCTURE
+        +-- sectors.bin  # BDSM sparse sector map
 ```
 
 ## Environment Variables
