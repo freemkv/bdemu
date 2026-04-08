@@ -120,16 +120,23 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
 
     // Rename output dir to slugified volume ID
     let slug = slugify(&udf.volume_id);
-    let parent = dir.parent().unwrap_or(Path::new("."));
-    let final_dir = parent.join(&slug);
-    if !slug.is_empty() && final_dir != dir && !final_dir.exists() {
-        fs::rename(dir, &final_dir).map_err(|e| format!("rename: {}", e))?;
-        println!();
-        println!("Capture complete: {}/", final_dir.display());
-    } else {
-        println!();
-        println!("Capture complete: {}/", output_dir);
+    if !slug.is_empty() {
+        let parent = dir.parent().unwrap_or(Path::new("."));
+        let mut final_dir = parent.join(&slug);
+        let mut n = 2;
+        while final_dir.exists() && final_dir != dir {
+            final_dir = parent.join(format!("{}_{}", slug, n));
+            n += 1;
+        }
+        if final_dir != dir {
+            fs::rename(dir, &final_dir).map_err(|e| format!("rename: {}", e))?;
+            println!();
+            println!("Capture complete: {}/", final_dir.display());
+            return Ok(());
+        }
     }
+    println!();
+    println!("Capture complete: {}/", output_dir);
     Ok(())
 }
 
