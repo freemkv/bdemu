@@ -144,8 +144,8 @@ fn usage() {
     println!("bdemu {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("Commands:");
-    println!("  run --profile <dir> [--disc <name>] -- <cmd>   Emulate a drive and run a command");
-    println!("  capture-disc <device> <dir> [--sectors N]      Capture disc from real hardware");
+    println!("  run --profile <dir> [--disc <name>] -- <cmd>   Emulate drive, run command");
+    println!("  capture-disc <device> <output_dir>             Smart capture from hardware");
     println!("  validate <profile_dir>                         Check profile completeness");
     println!();
     println!("Control (while emulator is running):");
@@ -155,11 +155,9 @@ fn usage() {
     println!("  list-discs                                     List available discs");
     println!();
     println!("Examples:");
-    println!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
-    println!("  bdemu run --profile profiles/bu40n --disc sample -- ./freemkv rip");
-    println!("  bdemu eject                                    # while running");
-    println!("  bdemu load sample2                             # swap disc");
-    println!("  bdemu capture-disc /dev/sg4 profiles/my-drive/discs/my-disc/");
+    println!("  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names, ejects");
+    println!("  bdemu run -p profiles/bu40n -d sample -- ./freemkv disc-info");
+    println!("  bdemu validate profiles/bu40n/");
     println!();
     println!("https://github.com/freemkv/bdemu");
 }
