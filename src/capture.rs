@@ -113,9 +113,33 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
     println!("  Saved {} sectors ({:.1} MB) in {} ranges",
         total, file_size as f64 / 1e6, ranges.len());
 
-    println!();
-    println!("Capture complete: {}/", output_dir);
+    // Eject disc so user can swap
+    print!("  Ejecting... ");
+    let _ = session.eject();
+    println!("done");
+
+    // Rename output dir to slugified volume ID
+    let slug = slugify(&udf.volume_id);
+    let parent = dir.parent().unwrap_or(Path::new("."));
+    let final_dir = parent.join(&slug);
+    if !slug.is_empty() && final_dir != dir && !final_dir.exists() {
+        fs::rename(dir, &final_dir).map_err(|e| format!("rename: {}", e))?;
+        println!();
+        println!("Capture complete: {}/", final_dir.display());
+    } else {
+        println!();
+        println!("Capture complete: {}/", output_dir);
+    }
     Ok(())
+}
+
+fn slugify(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 fn scsi_save(session: &mut DriveSession, dir: &Path, filename: &str, label: &str,
