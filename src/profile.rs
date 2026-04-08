@@ -5,12 +5,11 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Loaded profile with raw bytes ready to serve
 pub struct LoadedProfile {
     pub name: String,
-    pub base_dir: PathBuf,
     pub inquiry: Vec<u8>,
     pub current_profile: u16,
     pub features: Vec<(u16, Vec<u8>)>,
@@ -185,34 +184,7 @@ impl LoadedProfile {
         let disc = std::env::var("BDEMU_DISC").ok().and_then(|disc_name| {
             let disc_dir = dir.join("discs").join(&disc_name);
             if disc_dir.is_dir() {
-                // Load disc structure files: ds_00.bin, ds_01.bin, etc.
-                let mut disc_structures = HashMap::new();
-                if let Ok(entries) = fs::read_dir(&disc_dir) {
-                    for entry in entries.flatten() {
-                        let fname = entry.file_name().to_string_lossy().to_string();
-                        if fname.starts_with("ds_") && fname.ends_with(".bin") {
-                            let fmt_str = &fname[3..fname.len() - 4];
-                            if let Ok(fmt) = u8::from_str_radix(fmt_str, 16) {
-                                let data = read_bin(&entry.path());
-                                if !data.is_empty() {
-                                    disc_structures.insert(fmt, data);
-                                }
-                            }
-                        }
-                    }
-                }
-                let (sectors, sector_map) = parse_sector_file(
-                    read_bin(&disc_dir.join("sectors.bin"))
-                );
-                Some(DiscProfile {
-                    toc: read_bin(&disc_dir.join("toc.bin")),
-                    capacity: read_bin(&disc_dir.join("capacity.bin")),
-                    disc_info: read_bin(&disc_dir.join("disc_info.bin")),
-                    disc_structures,
-                    sector_data: read_bin(&disc_dir.join("sector_data.bin")),
-                    sectors,
-                    sector_map,
-                })
+                Some(load_disc(&disc_dir))
             } else {
                 None
             }
@@ -220,7 +192,7 @@ impl LoadedProfile {
 
         Some(LoadedProfile {
             name,
-            base_dir: dir.to_path_buf(),
+
             inquiry,
             current_profile,
             features,
@@ -310,7 +282,7 @@ impl LoadedProfile {
 
         Some(LoadedProfile {
             name: p.drive.product,
-            base_dir: PathBuf::from("."),
+
             inquiry: parse_hex(&p.inquiry.raw),
             current_profile: parse_u16(&p.get_config.current_profile),
             features,
@@ -339,6 +311,37 @@ impl LoadedProfile {
 
     pub fn has_disc(&self) -> bool {
         self.disc.is_some()
+    }
+}
+
+/// Load a disc profile from a directory containing captured SCSI responses.
+pub fn load_disc(dir: &Path) -> DiscProfile {
+    let mut disc_structures = HashMap::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with("ds_") && fname.ends_with(".bin") {
+                let fmt_str = &fname[3..fname.len() - 4];
+                if let Ok(fmt) = u8::from_str_radix(fmt_str, 16) {
+                    let data = read_bin(&entry.path());
+                    if !data.is_empty() {
+                        disc_structures.insert(fmt, data);
+                    }
+                }
+            }
+        }
+    }
+    let (sectors, sector_map) = parse_sector_file(
+        read_bin(&dir.join("sectors.bin"))
+    );
+    DiscProfile {
+        toc: read_bin(&dir.join("toc.bin")),
+        capacity: read_bin(&dir.join("capacity.bin")),
+        disc_info: read_bin(&dir.join("disc_info.bin")),
+        disc_structures,
+        sector_data: read_bin(&dir.join("sector_data.bin")),
+        sectors,
+        sector_map,
     }
 }
 
