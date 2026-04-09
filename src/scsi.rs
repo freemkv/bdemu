@@ -51,13 +51,13 @@ fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
     // Search libfreemkv's bundled profiles
     if let Ok(profiles) = libfreemkv::profile::load_bundled() {
         if let Some(matched) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
-            if matched.signature != [0; 4] {
+            if matched.drive_signature != [0; 4] {
                 log(0, &format!("  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
                     matched.vendor_id.trim(), matched.product_id.trim(),
                     matched.product_revision.trim(),
-                    matched.signature[0], matched.signature[1],
-                    matched.signature[2], matched.signature[3]));
-                return matched.signature;
+                    matched.drive_signature[0], matched.drive_signature[1],
+                    matched.drive_signature[2], matched.drive_signature[3]));
+                return matched.drive_signature;
             }
         }
         // No match — log clearly
