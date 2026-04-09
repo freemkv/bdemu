@@ -20,7 +20,7 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
     println!();
 
     let dev_path = Path::new(device);
-    let mut session = DriveSession::open_unlocked(dev_path)
+    let mut session = DriveSession::open(dev_path)
         .map_err(|e| format!("open drive: {}", e))?;
 
     println!("  Drive: {} {} {}",
