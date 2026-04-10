@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 struct State {
     profile: Arc<Mutex<LoadedProfile>>,
+    #[allow(dead_code)] // kept alive for the control socket listener thread
     emu_state: Arc<Mutex<control::EmulatorState>>,
 }
 
