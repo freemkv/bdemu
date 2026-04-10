@@ -1,6 +1,6 @@
 # bdemu — Feature List
 
-## v0.1.0 (current)
+## v0.5.0 (current)
 
 ### Done
 - [x] LD_PRELOAD SCSI interceptor (Rust cdylib)
@@ -18,18 +18,21 @@
 - [x] `bdemu capture-disc` — capture disc from real hardware
 - [x] `bdemu validate` — check profile completeness
 - [x] Disc state: no disc / disc loaded via BDEMU_DISC
-- [x] Auto-unlock (temp hack, returns "MMkv" on unlock CDBs)
+- [x] libfreemkv integration for correct unlock responses
+- [x] Control socket: insert/eject disc at runtime
+- [x] BDSM sparse sector format
+- [x] Smart capture via libfreemkv UDF range discovery
+- [x] Auto-eject after capture
+- [x] Auto-rename output to slugified volume ID
 
-### v0.2.0 (planned)
-- [ ] libfreemkv integration for correct unlock responses
+### Planned
 - [ ] AACS key exchange (SEND_KEY/REPORT_KEY handshake)
-- [ ] Control socket: insert/eject disc at runtime
-- [ ] `bdemu capture-drive` — capture drive profile (currently in freemkv-info)
+- [ ] `bdemu capture-drive` — capture drive profile (currently in freemkv drive-info)
 - [ ] Multiple simultaneous drives
 - [ ] Disc image (.iso) support for sector reads
 - [ ] Full AACS volume ID emulation
 
-### v0.3.0 (future)
+### Future
 - [ ] GUI frontend for disc management
 - [ ] Network-shared profiles
 - [ ] Automated test suite: identity → unlock → scan → rip

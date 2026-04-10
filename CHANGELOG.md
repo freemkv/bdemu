@@ -1,11 +1,25 @@
 # Changelog
 
+## 0.5.0 (2026-04-09)
+
+### Emulator
+
+- **libfreemkv unlock**: Drive signature lookup via bundled profile database (replaces hardcoded "MMkv")
+- **Control socket**: Runtime disc swapping via `/tmp/bdemu.sock` (load, eject, list-discs, status)
+- **UNIT_ATTENTION**: Proper media-changed signaling on disc swap
+- **Thread safety**: Replaced `static mut` globals with atomics and mutexes
+
+### CLI
+
+- Added `run` subcommand for LD_PRELOAD launching
+- Added `status`, `eject`, `load`, `list-discs` control commands
+
 ## 0.3.0 (2026-04-07)
 
 ### Capture
 
 - **Auto-eject**: disc tray opens automatically after capture completes
-- **Auto-rename**: output directory renamed to slugified UDF volume ID (e.g. `disc` → `dune__part_two`)
+- **Auto-rename**: output directory renamed to slugified UDF volume ID (e.g. `disc` -> `dune__part_two`)
 - **Collision handling**: appends `_2`, `_3` etc. if name already exists
 - **Fixed sector ranges**: uses updated libfreemkv that captures all JAR/metadata files
 

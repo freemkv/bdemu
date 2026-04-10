@@ -136,7 +136,7 @@ fn cmd_eject(
     st.disc_name = None;
 
     // Signal media change to SCSI layer
-    unsafe { crate::scsi::set_media_changed(true); }
+    crate::scsi::set_media_changed(true);
 
     Response::ok("ejected")
 }
@@ -169,7 +169,7 @@ fn cmd_load(
     st.disc_name = Some(name.to_string());
 
     // Signal media change to SCSI layer
-    unsafe { crate::scsi::set_media_changed(true); }
+    crate::scsi::set_media_changed(true);
 
     let sector_count = prof.disc.as_ref()
         .map(|d| d.sectors.len() / 2048)
@@ -200,4 +200,3 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
 
     Response::multi(lines)
 }
-

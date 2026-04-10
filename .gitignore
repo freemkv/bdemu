@@ -2,3 +2,6 @@
 *.so
 *.dylib
 .cargo/
+*.swp
+*.swo
+.DS_Store

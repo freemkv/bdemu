@@ -3,7 +3,6 @@
 //
 // Usage:
 //   bdemu capture-disc /dev/sg4 profiles/bu40n/discs/my_disc/
-//   bdemu capture-disc /dev/sg4 profiles/bu40n/discs/my_disc/ --sectors 50000
 //   bdemu validate profiles/bu40n/
 
 mod capture;

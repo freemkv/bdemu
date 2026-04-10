@@ -98,10 +98,10 @@ All byte arrays are hex-encoded strings. All fields from real SCSI responses.
 - `read_buffer`: Keyed by hex buffer ID. Only for mode 2 (vendor data)
 - All decoded fields (serial, vendor, etc.) are convenience — `raw` is authoritative
 
-## Producing (freemkv-info)
+## Producing
 
 ```
-freemkv-info --share > my-drive.json
+freemkv drive-info --share > my-drive.json
 ```
 
 Sends standard SCSI commands to the drive, captures responses, outputs JSON.
@@ -109,7 +109,7 @@ Sends standard SCSI commands to the drive, captures responses, outputs JSON.
 ## Consuming (bdemu)
 
 ```
-bdemu my-drive.json -- makemkvcon --robot -r info disc:0
+bdemu run --profile my-drive/ -- freemkv disc-info
 ```
 
-Intercepts SG_IO, returns responses from the JSON profile.
+Intercepts SG_IO, returns responses from the drive profile.

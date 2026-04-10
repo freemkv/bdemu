@@ -6,19 +6,20 @@
 
 use crate::profile::LoadedProfile;
 use crate::sg::SgIoHdr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
-static mut CALL_NUM: u32 = 0;
-// Track last sense for REQUEST_SENSE
-static mut LAST_SENSE: [u8; 3] = [0, 0, 0]; // sense_key, asc, ascq
-static mut MEDIA_CHANGED: bool = false;
+static CALL_NUM: AtomicU32 = AtomicU32::new(0);
+static LAST_SENSE: Mutex<[u8; 3]> = Mutex::new([0, 0, 0]); // sense_key, asc, ascq
+static MEDIA_CHANGED: AtomicBool = AtomicBool::new(false);
 
 /// Called by the control socket to signal disc change.
-pub unsafe fn set_media_changed(changed: bool) {
-    MEDIA_CHANGED = changed;
+pub fn set_media_changed(changed: bool) {
+    MEDIA_CHANGED.store(changed, Ordering::SeqCst);
 }
 
 fn call() -> u32 {
-    unsafe { CALL_NUM += 1; CALL_NUM }
+    CALL_NUM.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 fn log(num: u32, msg: &str) {
@@ -68,7 +69,9 @@ fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
 }
 
 fn save_sense(key: u8, asc: u8, ascq: u8) {
-    unsafe { LAST_SENSE = [key, asc, ascq]; }
+    if let Ok(mut sense) = LAST_SENSE.lock() {
+        *sense = [key, asc, ascq];
+    }
 }
 
 pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
@@ -77,14 +80,11 @@ pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
 
     // Check for UNIT_ATTENTION (media changed) — takes priority
     // Per SPC-4 §5.9.4, UNIT_ATTENTION reported on first command after change
-    unsafe {
-        if MEDIA_CHANGED && hdr.opcode() != 0x12 && hdr.opcode() != 0x03 {
-            MEDIA_CHANGED = false;
-            hdr.set_check_condition(0x06, 0x28, 0x00); // UNIT ATTENTION, MEDIUM MAY HAVE CHANGED
-            save_sense(0x06, 0x28, 0x00);
-            log(n, &format!("SCSI 0x{:02X} -> UNIT_ATTENTION (media changed)", hdr.opcode()));
-            return;
-        }
+    if MEDIA_CHANGED.swap(false, Ordering::SeqCst) && hdr.opcode() != 0x12 && hdr.opcode() != 0x03 {
+        hdr.set_check_condition(0x06, 0x28, 0x00); // UNIT ATTENTION, MEDIUM MAY HAVE CHANGED
+        save_sense(0x06, 0x28, 0x00);
+        log(n, &format!("SCSI 0x{:02X} -> UNIT_ATTENTION (media changed)", hdr.opcode()));
+        return;
     }
 
     match hdr.opcode() {
@@ -140,11 +140,11 @@ fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
     let alloc = hdr.cdb(4) as usize;
     let mut sense = [0u8; 18];
     sense[0] = 0x70; // response code: current, fixed format
-    unsafe {
-        sense[2] = LAST_SENSE[0]; // sense key
-        sense[7] = 10;             // additional sense length
-        sense[12] = LAST_SENSE[1]; // ASC
-        sense[13] = LAST_SENSE[2]; // ASCQ
+    if let Ok(last) = LAST_SENSE.lock() {
+        sense[2] = last[0];   // sense key
+        sense[7] = 10;        // additional sense length
+        sense[12] = last[1];  // ASC
+        sense[13] = last[2];  // ASCQ
     }
     let len = std::cmp::min(alloc, 18);
     hdr.write_response(&sense[..len]);
@@ -335,15 +335,20 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
     log(n, &format!("{} lba={} count={} ({} bytes)", cmd, lba, count, hdr.dxfer_len));
 }
 
-/// Look up a sector in the sparse sector map.
+/// Look up a sector in the sparse sector map using binary search.
 /// Returns the byte offset into the sectors data, or None if not captured.
 fn lookup_sector(map: &[(u32, u32, usize)], _data: &[u8], lba: u32) -> Option<usize> {
-    for &(start, count, byte_offset) in map {
-        if lba >= start && lba < start + count {
-            return Some(byte_offset + (lba - start) as usize * 2048);
+    let idx = map.binary_search_by(|&(start, count, _)| {
+        if lba < start {
+            std::cmp::Ordering::Greater
+        } else if lba >= start + count {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
         }
-    }
-    None
+    }).ok()?;
+    let (start, _, byte_offset) = map[idx];
+    Some(byte_offset + (lba - start) as usize * 2048)
 }
 
 // ============================================================================
