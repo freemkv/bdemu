@@ -12,7 +12,7 @@ jobs:
   verify:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Verify Cargo.toml version matches tag
         run: |
           CARGO_VER="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')"
@@ -26,7 +26,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Test
@@ -42,7 +42,10 @@ jobs:
           cp target/release/bdemu "$DIR/"
           cp target/release/libbdemu.so "$DIR/" 2>/dev/null || true
           cp -r profiles/* "$DIR/profiles/" 2>/dev/null || true
+          # Versioned archive
           tar czf "${DIR}-x86_64-linux.tar.gz" "$DIR"
+          # Stable-name archive (for /latest/ URLs)
+          tar czf "bdemu-x86_64-linux.tar.gz" "$DIR"
 
       - name: Upload
         uses: softprops/action-gh-release@v2
@@ -53,7 +56,7 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
       - name: Update version in README
