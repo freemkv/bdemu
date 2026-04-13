@@ -31,7 +31,7 @@ fn log(num: u32, msg: &str) {
 /// Look up the unlock signature for this emulated drive using libfreemkv.
 /// Matches the drive's INQUIRY fields + firmware date against the bundled profile database.
 fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
-    use libfreemkv::identity::DriveId;
+    use libfreemkv::DriveId;
 
     // Extract firmware date from GET_CONFIG 010C feature data
     let firmware_date = profile.find_feature(0x010C)

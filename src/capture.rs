@@ -8,7 +8,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use libfreemkv::{DriveSession, scsi};
+use libfreemkv::{Drive, scsi};
 
 const SECTOR_SIZE: usize = 2048;
 
@@ -20,7 +20,7 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
     println!();
 
     let dev_path = Path::new(device);
-    let mut session = DriveSession::open(dev_path)
+    let mut session = Drive::open(dev_path)
         .map_err(|e| format!("open drive: {}", e))?;
 
     println!("  Drive: {} {} {}",
@@ -45,7 +45,7 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
     // Parse UDF, discover metadata ranges
     println!();
     print!("  Parsing UDF... ");
-    let udf = libfreemkv::udf::read_filesystem(&mut session)
+    let udf = libfreemkv::read_filesystem(&mut session)
         .map_err(|e| format!("UDF: {}", e))?;
     println!("done");
 
@@ -149,7 +149,7 @@ fn slugify(name: &str) -> String {
         .to_string()
 }
 
-fn scsi_save(session: &mut DriveSession, dir: &Path, filename: &str, label: &str,
+fn scsi_save(session: &mut Drive, dir: &Path, filename: &str, label: &str,
     cdb: &[u8], size: usize) -> Option<Vec<u8>>
 {
     print!("  {}... ", label);
