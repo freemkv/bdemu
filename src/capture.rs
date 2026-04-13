@@ -87,7 +87,7 @@ pub fn capture_disc(device: &str, output_dir: &str) -> Result<(), String> {
             let n = ((end - lba) as u16).min(chunk);
             let mut buf = vec![0u8; n as usize * SECTOR_SIZE];
 
-            if let Err(e) = session.read_disc(lba, n, &mut buf) {
+            if let Err(e) = session.read(lba, n, &mut buf) {
                 errors += 1;
                 if errors <= 3 {
                     eprintln!("\n  Read error at LBA {}: {}", lba, e);
