@@ -49,14 +49,18 @@ fn main() {
             let profile = profile.unwrap_or_else(|| {
                 eprintln!("Error: --profile <dir> is required");
                 eprintln!();
-                eprintln!("Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]");
+                eprintln!(
+                    "Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]"
+                );
                 std::process::exit(1);
             });
 
             if cmd_start == 0 || cmd_start >= args.len() {
                 eprintln!("Error: no command specified");
                 eprintln!();
-                eprintln!("Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]");
+                eprintln!(
+                    "Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]"
+                );
                 eprintln!();
                 eprintln!("Example:");
                 eprintln!("  bdemu run --profile profiles/bu40n -- ./freemkv info");
@@ -222,7 +226,10 @@ fn validate_profile(dir: &str) {
                     extra = format!(" — serial: {}", serial);
                 }
             }
-            println!("  ✓ {} (0x{:04X} {}, {} bytes){}", file, code, name, sz, extra);
+            println!(
+                "  ✓ {} (0x{:04X} {}, {} bytes){}",
+                file, code, name, sz, extra
+            );
         } else {
             println!("  ✗ {} (0x{:04X} {}) MISSING", file, code, name);
             ok = false;
@@ -231,10 +238,15 @@ fn validate_profile(dir: &str) {
 
     // Count total features
     let feat_count = std::fs::read_dir(p)
-        .map(|entries| entries.flatten().filter(|e| {
-            let n = e.file_name().to_string_lossy().to_string();
-            n.starts_with("gc_") && n.ends_with(".bin")
-        }).count())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    n.starts_with("gc_") && n.ends_with(".bin")
+                })
+                .count()
+        })
         .unwrap_or(0);
     println!("  ✓ {} total features", feat_count);
 
@@ -245,7 +257,9 @@ fn validate_profile(dir: &str) {
         ("rb_f1.bin", "READ_BUFFER 0xF1 (Pioneer)"),
     ] {
         if p.join(file).exists() {
-            let sz = std::fs::metadata(p.join(file)).map(|m| m.len()).unwrap_or(0);
+            let sz = std::fs::metadata(p.join(file))
+                .map(|m| m.len())
+                .unwrap_or(0);
             println!("  ✓ {} ({}, {} bytes)", file, desc, sz);
         } else {
             println!("  — {} ({}) not present", file, desc);
@@ -261,7 +275,10 @@ fn validate_profile(dir: &str) {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let has_sectors = entry.path().join("sectors.bin").exists();
                     let has_toc = entry.path().join("toc.bin").exists();
-                    println!("  ✓ disc: {} (toc={}, sectors={})", name, has_toc, has_sectors);
+                    println!(
+                        "  ✓ disc: {} (toc={}, sectors={})",
+                        name, has_toc, has_sectors
+                    );
                 }
             }
         }
@@ -294,7 +311,7 @@ fn send_control(cmd: &str) {
     writeln!(stream, "{}", cmd).unwrap();
 
     let reader = BufReader::new(&stream);
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         println!("{}", line);
     }
 }

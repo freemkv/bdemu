@@ -23,10 +23,10 @@ pub struct DiscProfile {
     pub toc: Vec<u8>,
     pub capacity: Vec<u8>,
     pub disc_info: Vec<u8>,
-    pub disc_structures: HashMap<u8, Vec<u8>>,  // format_code -> data
-    pub sector_data: Vec<u8>,  // single sector pattern (repeated)
-    pub sectors: Vec<u8>,      // sector data (flat or sparse)
-    pub sector_map: Vec<(u32, u32, usize)>, // (start_lba, count, byte_offset) — empty = flat
+    pub disc_structures: HashMap<u8, Vec<u8>>, // format_code -> data
+    pub sector_data: Vec<u8>,                  // single sector pattern (repeated)
+    pub sectors: Vec<u8>,                      // sector data (flat or sparse)
+    pub sector_map: Vec<(u32, u32, usize)>,    // (start_lba, count, byte_offset) — empty = flat
 }
 
 /// Sector map file format:
@@ -51,8 +51,10 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
         let mut data_offset = header_size;
         for i in 0..num_ranges {
             let off = 12 + i * 8;
-            let start_lba = u32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]]);
-            let count = u32::from_le_bytes([data[off+4], data[off+5], data[off+6], data[off+7]]);
+            let start_lba =
+                u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+            let count =
+                u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
             map.push((start_lba, count, data_offset));
             data_offset += count as usize * 2048;
         }
@@ -106,26 +108,45 @@ impl LoadedProfile {
             }
             if let Some((key, val)) = line.split_once('=') {
                 let key = key.trim().trim_matches('"');
-                let val = val.trim().trim_matches('"').split('#').next().unwrap().trim().trim_matches('"');
+                let val = val
+                    .trim()
+                    .trim_matches('"')
+                    .split('#')
+                    .next()
+                    .unwrap()
+                    .trim()
+                    .trim_matches('"');
 
                 match section.as_str() {
                     "drive" => {
-                        if key == "product" { name = val.to_string(); }
+                        if key == "product" {
+                            name = val.to_string();
+                        }
                         if key == "current_profile" {
                             current_profile = parse_u16(val);
                         }
                     }
                     "files" => {
-                        if key == "inquiry" { inquiry_file = val.to_string(); }
-                        if key == "rpc_state" { rpc_file = val.to_string(); }
-                        if key == "mode_2a" { mode_2a_file = val.to_string(); }
+                        if key == "inquiry" {
+                            inquiry_file = val.to_string();
+                        }
+                        if key == "rpc_state" {
+                            rpc_file = val.to_string();
+                        }
+                        if key == "mode_2a" {
+                            mode_2a_file = val.to_string();
+                        }
                     }
                     "features" => {
                         let code = parse_u16(key);
                         feature_files.push((code, val.to_string()));
                     }
                     "read_buffer" => {
-                        let id = u8::from_str_radix(key.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0);
+                        let id = u8::from_str_radix(
+                            key.trim_start_matches("0x").trim_start_matches("0X"),
+                            16,
+                        )
+                        .unwrap_or(0);
                         rb_files.push((id, val.to_string()));
                     }
                     "unlock" => {
@@ -286,11 +307,13 @@ impl LoadedProfile {
             inquiry: parse_hex(&p.inquiry.raw),
             current_profile: parse_u16(&p.get_config.current_profile),
             features,
-            rpc_state: p.report_key
+            rpc_state: p
+                .report_key
                 .and_then(|rk| rk.rpc_state.map(|d| parse_hex(&d.raw)))
                 .unwrap_or_default(),
             read_bufs,
-            mode_2a: p.mode_sense
+            mode_2a: p
+                .mode_sense
                 .and_then(|ms| ms.page_2a.map(|d| parse_hex(&d.raw)))
                 .unwrap_or_default(),
             disc: None,
@@ -298,13 +321,15 @@ impl LoadedProfile {
     }
 
     pub fn find_feature(&self, code: u16) -> Option<&[u8]> {
-        self.features.iter()
+        self.features
+            .iter()
             .find(|(c, _)| *c == code)
             .map(|(_, data)| data.as_slice())
     }
 
     pub fn find_read_buf(&self, buf_id: u8) -> Option<&[u8]> {
-        self.read_bufs.iter()
+        self.read_bufs
+            .iter()
             .find(|(id, _)| *id == buf_id)
             .map(|(_, data)| data.as_slice())
     }
@@ -331,9 +356,7 @@ pub fn load_disc(dir: &Path) -> DiscProfile {
             }
         }
     }
-    let (sectors, sector_map) = parse_sector_file(
-        read_bin(&dir.join("sectors.bin"))
-    );
+    let (sectors, sector_map) = parse_sector_file(read_bin(&dir.join("sectors.bin")));
     DiscProfile {
         toc: read_bin(&dir.join("toc.bin")),
         capacity: read_bin(&dir.join("capacity.bin")),

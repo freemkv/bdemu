@@ -3,10 +3,10 @@
 //
 // LD_PRELOAD entry point — intercepts ioctl(SG_IO) calls
 
+mod control;
 mod profile;
 mod scsi;
 mod sg;
-mod control;
 
 use once_cell::sync::Lazy;
 use profile::LoadedProfile;
@@ -54,19 +54,22 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
     // Start control socket listener
     control::start_listener(Arc::clone(&profile), Arc::clone(&emu_state));
 
-    Some(State { profile, emu_state: emu_state })
+    Some(State { profile, emu_state })
 });
 
 type RealIoctl = unsafe extern "C" fn(libc::c_int, libc::c_ulong, ...) -> libc::c_int;
 
 static REAL_IOCTL: Lazy<RealIoctl> = Lazy::new(|| unsafe {
-    let ptr = libc::dlsym(libc::RTLD_NEXT, b"ioctl\0".as_ptr() as *const _);
+    let ptr = libc::dlsym(libc::RTLD_NEXT, c"ioctl".as_ptr());
     if ptr.is_null() {
         panic!("bdemu: cannot find real ioctl");
     }
     std::mem::transmute(ptr)
 });
 
+/// # Safety
+/// Called by the dynamic linker as an LD_PRELOAD ioctl intercept.
+/// `arg` must be a valid pointer to an `SgIoHdr` when `request` is `SG_IO`.
 #[no_mangle]
 pub unsafe extern "C" fn ioctl(
     fd: libc::c_int,
@@ -84,6 +87,6 @@ pub unsafe extern "C" fn ioctl(
 
     let guard = state.profile.lock().unwrap();
     let hdr = &mut *(arg as *mut SgIoHdr);
-    scsi::handle_scsi(hdr, &*guard);
+    scsi::handle_scsi(hdr, &guard);
     0
 }

@@ -34,7 +34,8 @@ fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
     use libfreemkv::DriveId;
 
     // Extract firmware date from GET_CONFIG 010C feature data
-    let firmware_date = profile.find_feature(0x010C)
+    let firmware_date = profile
+        .find_feature(0x010C)
         .and_then(|data| {
             // Feature descriptor: [0-1] code, [2] version, [3] addl_len, [4+] data
             if data.len() > 4 {
@@ -53,16 +54,30 @@ fn lookup_unlock_signature(profile: &LoadedProfile) -> [u8; 4] {
     if let Ok(profiles) = libfreemkv::profile::load_bundled() {
         if let Some(m) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
             if m.profile.signature != [0; 4] {
-                log(0, &format!("  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
-                    m.profile.identity.vendor_id.trim(), m.profile.identity.vendor_specific.trim(),
-                    m.profile.identity.product_revision.trim(),
-                    m.profile.signature[0], m.profile.signature[1],
-                    m.profile.signature[2], m.profile.signature[3]));
+                log(
+                    0,
+                    &format!(
+                        "  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
+                        m.profile.identity.vendor_id.trim(),
+                        m.profile.identity.vendor_specific.trim(),
+                        m.profile.identity.product_revision.trim(),
+                        m.profile.signature[0],
+                        m.profile.signature[1],
+                        m.profile.signature[2],
+                        m.profile.signature[3]
+                    ),
+                );
                 return m.profile.signature;
             }
         }
         // No match — log clearly
-        log(0, &format!("  No profile match for: {} (date={})", drive_id, firmware_date));
+        log(
+            0,
+            &format!(
+                "  No profile match for: {} (date={})",
+                drive_id, firmware_date
+            ),
+        );
     }
 
     [0; 4]
@@ -83,7 +98,13 @@ pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
     if MEDIA_CHANGED.swap(false, Ordering::SeqCst) && hdr.opcode() != 0x12 && hdr.opcode() != 0x03 {
         hdr.set_check_condition(0x06, 0x28, 0x00); // UNIT ATTENTION, MEDIUM MAY HAVE CHANGED
         save_sense(0x06, 0x28, 0x00);
-        log(n, &format!("SCSI 0x{:02X} -> UNIT_ATTENTION (media changed)", hdr.opcode()));
+        log(
+            n,
+            &format!(
+                "SCSI 0x{:02X} -> UNIT_ATTENTION (media changed)",
+                hdr.opcode()
+            ),
+        );
         return;
     }
 
@@ -109,7 +130,14 @@ pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
         0xBB => cmd_set_cd_speed(hdr, n),
         _ => {
             hdr.write_response(&[]);
-            log(n, &format!("SCSI 0x{:02X} ({} bytes) [unhandled]", hdr.opcode(), hdr.dxfer_len));
+            log(
+                n,
+                &format!(
+                    "SCSI 0x{:02X} ({} bytes) [unhandled]",
+                    hdr.opcode(),
+                    hdr.dxfer_len
+                ),
+            );
         }
     }
 }
@@ -141,10 +169,10 @@ fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
     let mut sense = [0u8; 18];
     sense[0] = 0x70; // response code: current, fixed format
     if let Ok(last) = LAST_SENSE.lock() {
-        sense[2] = last[0];   // sense key
-        sense[7] = 10;        // additional sense length
-        sense[12] = last[1];  // ASC
-        sense[13] = last[2];  // ASCQ
+        sense[2] = last[0]; // sense key
+        sense[7] = 10; // additional sense length
+        sense[12] = last[1]; // ASC
+        sense[13] = last[2]; // ASCQ
     }
     let len = std::cmp::min(alloc, 18);
     hdr.write_response(&sense[..len]);
@@ -171,11 +199,11 @@ fn cmd_inquiry(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             // Page 0x00: Supported VPD Pages
             0x00 => {
                 let resp = [
-                    0x05,       // peripheral qualifier + device type (CD/DVD)
-                    0x00,       // page code
+                    0x05, // peripheral qualifier + device type (CD/DVD)
+                    0x00, // page code
                     0x00, 0x02, // page length = 2
-                    0x00,       // supported: page 0x00
-                    0x80,       // supported: page 0x80 (serial)
+                    0x00, // supported: page 0x00
+                    0x80, // supported: page 0x80 (serial)
                 ];
                 hdr.write_response(&resp);
                 log(n, "INQUIRY VPD page 0x00 (supported pages)");
@@ -183,19 +211,26 @@ fn cmd_inquiry(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             // Page 0x80: Unit Serial Number
             0x80 => {
                 // Extract serial from GET_CONFIG 0x0108 feature data
-                let serial = profile.find_feature(0x0108)
+                let serial = profile
+                    .find_feature(0x0108)
                     .map(|f| if f.len() > 4 { &f[4..] } else { &[] as &[u8] })
                     .unwrap_or(&[]);
                 let mut resp = vec![0x05, 0x80, 0x00, serial.len() as u8];
                 resp.extend_from_slice(serial);
                 hdr.write_response(&resp);
-                log(n, &format!("INQUIRY VPD page 0x80 (serial, {} bytes)", serial.len()));
+                log(
+                    n,
+                    &format!("INQUIRY VPD page 0x80 (serial, {} bytes)", serial.len()),
+                );
             }
             _ => {
                 // Unsupported VPD page
                 hdr.set_check_condition(0x05, 0x24, 0x00); // ILLEGAL REQUEST
                 save_sense(0x05, 0x24, 0x00);
-                log(n, &format!("INQUIRY VPD page 0x{:02X} -> ILLEGAL REQUEST", page_code));
+                log(
+                    n,
+                    &format!("INQUIRY VPD page 0x{:02X} -> ILLEGAL REQUEST", page_code),
+                );
             }
         }
     }
@@ -243,7 +278,10 @@ fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     if let Some(disc) = &profile.disc {
         if !disc.capacity.is_empty() {
             hdr.write_response(&disc.capacity);
-            log(n, &format!("READ_CAPACITY ({} bytes) from disc", hdr.dxfer_len));
+            log(
+                n,
+                &format!("READ_CAPACITY ({} bytes) from disc", hdr.dxfer_len),
+            );
             return;
         }
     }
@@ -262,7 +300,10 @@ fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     resp[0..4].copy_from_slice(&lba.to_be_bytes());
     resp[4..8].copy_from_slice(&blk.to_be_bytes());
     hdr.write_response(&resp);
-    log(n, &format!("READ_CAPACITY ({} bytes) default", hdr.dxfer_len));
+    log(
+        n,
+        &format!("READ_CAPACITY ({} bytes) default", hdr.dxfer_len),
+    );
 }
 
 // ============================================================================
@@ -286,11 +327,21 @@ fn cmd_read_12(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     read_sectors(hdr, profile, lba, count, n, "READ(12)");
 }
 
-fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32, n: u32, cmd: &str) {
+fn read_sectors(
+    hdr: &mut SgIoHdr,
+    profile: &LoadedProfile,
+    lba: u32,
+    count: u32,
+    n: u32,
+    cmd: &str,
+) {
     if !profile.has_disc() {
         hdr.set_check_condition(0x02, 0x3A, 0x00);
         save_sense(0x02, 0x3A, 0x00);
-        log(n, &format!("{} lba={} count={} -> NOT READY", cmd, lba, count));
+        log(
+            n,
+            &format!("{} lba={} count={} -> NOT READY", cmd, lba, count),
+        );
         return;
     }
 
@@ -305,9 +356,8 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
                 let target_lba = lba + i as u32;
                 if let Some(offset) = lookup_sector(&disc.sector_map, &disc.sectors, target_lba) {
                     let dst = i * sector_size;
-                    data[dst..dst + sector_size].copy_from_slice(
-                        &disc.sectors[offset..offset + sector_size]
-                    );
+                    data[dst..dst + sector_size]
+                        .copy_from_slice(&disc.sectors[offset..offset + sector_size]);
                 }
                 // Not in map = zeros (already initialized)
             }
@@ -332,21 +382,29 @@ fn read_sectors(hdr: &mut SgIoHdr, profile: &LoadedProfile, lba: u32, count: u32
     }
 
     hdr.write_response(&data);
-    log(n, &format!("{} lba={} count={} ({} bytes)", cmd, lba, count, hdr.dxfer_len));
+    log(
+        n,
+        &format!(
+            "{} lba={} count={} ({} bytes)",
+            cmd, lba, count, hdr.dxfer_len
+        ),
+    );
 }
 
 /// Look up a sector in the sparse sector map using binary search.
 /// Returns the byte offset into the sectors data, or None if not captured.
 fn lookup_sector(map: &[(u32, u32, usize)], _data: &[u8], lba: u32) -> Option<usize> {
-    let idx = map.binary_search_by(|&(start, count, _)| {
-        if lba < start {
-            std::cmp::Ordering::Greater
-        } else if lba >= start + count {
-            std::cmp::Ordering::Less
-        } else {
-            std::cmp::Ordering::Equal
-        }
-    }).ok()?;
+    let idx = map
+        .binary_search_by(|&(start, count, _)| {
+            if lba < start {
+                std::cmp::Ordering::Greater
+            } else if lba >= start + count {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .ok()?;
     let (start, _, byte_offset) = map[idx];
     Some(byte_offset + (lba - start) as usize * 2048)
 }
@@ -358,7 +416,13 @@ fn lookup_sector(map: &[(u32, u32, usize)], _data: &[u8], lba: u32) -> Option<us
 fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
     let mode = hdr.cdb(1) & 0x1F;
     let buf_id = hdr.cdb(2);
-    log(n, &format!("WRITE_BUFFER mode={} buf=0x{:02X} ({} bytes)", mode, buf_id, hdr.dxfer_len));
+    log(
+        n,
+        &format!(
+            "WRITE_BUFFER mode={} buf=0x{:02X} ({} bytes)",
+            mode, buf_id, hdr.dxfer_len
+        ),
+    );
 }
 
 // ============================================================================
@@ -376,8 +440,7 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     // MT1959-A: mode=1 buf=0x44 len=64
     // MT1959-B: mode=2 buf=0x77 len=64
     // Pioneer:  mode=2 buf varies
-    let is_unlock = (mode == 1 && buf_id == 0x44)
-                 || (mode == 2 && buf_id == 0x77);
+    let is_unlock = (mode == 1 && buf_id == 0x44) || (mode == 2 && buf_id == 0x77);
 
     if is_unlock {
         // Look up drive signature from libfreemkv bundled profiles.
@@ -388,11 +451,19 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             // Signature at [0:4] from profile database
             resp[0..4].copy_from_slice(&sig);
             // "MMkv" at [12:16] — universal verification
-            resp[12] = b'M'; resp[13] = b'M'; resp[14] = b'k'; resp[15] = b'v';
+            resp[12] = b'M';
+            resp[13] = b'M';
+            resp[14] = b'k';
+            resp[15] = b'v';
         }
         hdr.write_response(&resp);
-        log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} -> UNLOCK (sig={:02x}{:02x}{:02x}{:02x})",
-                         mode, buf_id, sig[0], sig[1], sig[2], sig[3]));
+        log(
+            n,
+            &format!(
+                "READ_BUFFER mode={} buf=0x{:02X} -> UNLOCK (sig={:02x}{:02x}{:02x}{:02x})",
+                mode, buf_id, sig[0], sig[1], sig[2], sig[3]
+            ),
+        );
         return;
     }
 
@@ -401,27 +472,54 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         2 => {
             if let Some(data) = profile.find_read_buf(buf_id) {
                 hdr.write_response(data);
-                log(n, &format!("READ_BUFFER mode=2 buf=0x{:02X} ({} bytes)", buf_id, hdr.dxfer_len));
+                log(
+                    n,
+                    &format!(
+                        "READ_BUFFER mode=2 buf=0x{:02X} ({} bytes)",
+                        buf_id, hdr.dxfer_len
+                    ),
+                );
             } else {
                 hdr.set_check_condition(0x05, 0x24, 0x00); // ILLEGAL REQUEST
                 save_sense(0x05, 0x24, 0x00);
-                log(n, &format!("READ_BUFFER mode=2 buf=0x{:02X} -> ILLEGAL REQUEST", buf_id));
+                log(
+                    n,
+                    &format!("READ_BUFFER mode=2 buf=0x{:02X} -> ILLEGAL REQUEST", buf_id),
+                );
             }
         }
         // Mode 3: Descriptor — return buffer capacity
         3 => {
             let resp = [0u8; 4];
             hdr.write_response(&resp);
-            log(n, &format!("READ_BUFFER mode=3 buf=0x{:02X} ({} bytes)", buf_id, hdr.dxfer_len));
+            log(
+                n,
+                &format!(
+                    "READ_BUFFER mode=3 buf=0x{:02X} ({} bytes)",
+                    buf_id, hdr.dxfer_len
+                ),
+            );
         }
         // Mode 6: Vendor-specific (MTK register read)
         6 => {
             hdr.write_response(&[]);
-            log(n, &format!("READ_BUFFER mode=6 buf=0x{:02X} ({} bytes)", buf_id, hdr.dxfer_len));
+            log(
+                n,
+                &format!(
+                    "READ_BUFFER mode=6 buf=0x{:02X} ({} bytes)",
+                    buf_id, hdr.dxfer_len
+                ),
+            );
         }
         _ => {
             hdr.write_response(&[]);
-            log(n, &format!("READ_BUFFER mode={} buf=0x{:02X} ({} bytes)", mode, buf_id, hdr.dxfer_len));
+            log(
+                n,
+                &format!(
+                    "READ_BUFFER mode={} buf=0x{:02X} ({} bytes)",
+                    mode, buf_id, hdr.dxfer_len
+                ),
+            );
         }
     }
 }
@@ -448,7 +546,8 @@ fn cmd_read_toc(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 
     // Default minimal TOC
     let mut resp = [0u8; 12];
-    resp[0] = 0x00; resp[1] = 0x0A; // data length
+    resp[0] = 0x00;
+    resp[1] = 0x0A; // data length
     resp[2] = 0x01; // first track
     resp[3] = 0x01; // last track
     resp[5] = 0x14; // ADR=1, CONTROL=4 (data)
@@ -492,7 +591,10 @@ fn cmd_get_configuration(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 resp[6..8].copy_from_slice(&profile.current_profile.to_be_bytes());
                 resp[8..].copy_from_slice(feat_data);
                 hdr.write_response(&resp);
-                log(n, &format!("GET_CONFIG 0x{:04X} rt=2 ({} bytes)", feat, hdr.dxfer_len));
+                log(
+                    n,
+                    &format!("GET_CONFIG 0x{:04X} rt=2 ({} bytes)", feat, hdr.dxfer_len),
+                );
             } else {
                 // Feature not present — return header only per MMC-6 §6.6.2
                 let mut resp = [0u8; 8];
@@ -522,8 +624,16 @@ fn cmd_get_configuration(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 resp[8..].copy_from_slice(&body);
             }
             hdr.write_response(&resp);
-            log(n, &format!("GET_CONFIG 0x{:04X} rt={} ({} bytes, {} features)",
-                            feat, rt, hdr.dxfer_len, profile.features.len()));
+            log(
+                n,
+                &format!(
+                    "GET_CONFIG 0x{:04X} rt={} ({} bytes, {} features)",
+                    feat,
+                    rt,
+                    hdr.dxfer_len,
+                    profile.features.len()
+                ),
+            );
         }
     }
 }
@@ -553,9 +663,10 @@ fn cmd_get_event_status(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     // Media event class (bit 4)
     if class_req & 0x10 != 0 {
         let mut resp = [0u8; 8];
-        resp[0] = 0x00; resp[1] = 0x06; // event descriptor length
-        resp[2] = 0x04;                  // notification class = media
-        resp[3] = 0x10;                  // supported classes = media
+        resp[0] = 0x00;
+        resp[1] = 0x06; // event descriptor length
+        resp[2] = 0x04; // notification class = media
+        resp[3] = 0x10; // supported classes = media
 
         if profile.has_disc() {
             resp[4] = 0x02; // media event: media present
@@ -565,11 +676,15 @@ fn cmd_get_event_status(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             resp[5] = 0x00; // door closed, no media
         }
         hdr.write_response(&resp);
-        log(n, &format!("GET_EVENT_STATUS media (disc={})", profile.has_disc()));
+        log(
+            n,
+            &format!("GET_EVENT_STATUS media (disc={})", profile.has_disc()),
+        );
     } else {
         // No supported event class
         let mut resp = [0u8; 4];
-        resp[0] = 0x00; resp[1] = 0x02;
+        resp[0] = 0x00;
+        resp[1] = 0x02;
         resp[2] = 0x00; // no event
         resp[3] = 0x00; // no supported classes
         hdr.write_response(&resp);
@@ -592,20 +707,29 @@ fn cmd_read_disc_info(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     if let Some(disc) = &profile.disc {
         if !disc.disc_info.is_empty() {
             hdr.write_response(&disc.disc_info);
-            log(n, &format!("READ_DISC_INFO ({} bytes) from disc", disc.disc_info.len()));
+            log(
+                n,
+                &format!("READ_DISC_INFO ({} bytes) from disc", disc.disc_info.len()),
+            );
             return;
         }
     }
 
     // Default
     let mut resp = [0u8; 34];
-    resp[0] = 0x00; resp[1] = 0x20;
+    resp[0] = 0x00;
+    resp[1] = 0x20;
     resp[2] = 0x0E;
-    resp[3] = 0x01; resp[4] = 0x01;
-    resp[5] = 0x01; resp[6] = 0x01;
+    resp[3] = 0x01;
+    resp[4] = 0x01;
+    resp[5] = 0x01;
+    resp[6] = 0x01;
     resp[7] = 0x20;
     hdr.write_response(&resp);
-    log(n, &format!("READ_DISC_INFO ({} bytes) default", hdr.dxfer_len));
+    log(
+        n,
+        &format!("READ_DISC_INFO ({} bytes) default", hdr.dxfer_len),
+    );
 }
 
 // ============================================================================
@@ -628,13 +752,19 @@ fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             } else {
                 // Minimal capabilities page
                 let mut resp = [0u8; 28];
-                resp[0] = 0x00; resp[1] = 0x1A; // data length
-                // Page 2A header
-                resp[8] = 0x2A; resp[9] = 0x12; // page code, page length
-                resp[10] = 0x3F; resp[11] = 0x37; // read capabilities
+                resp[0] = 0x00;
+                resp[1] = 0x1A; // data length
+                                // Page 2A header
+                resp[8] = 0x2A;
+                resp[9] = 0x12; // page code, page length
+                resp[10] = 0x3F;
+                resp[11] = 0x37; // read capabilities
                 hdr.write_response(&resp);
             }
-            log(n, &format!("MODE_SENSE page 0x2A ({} bytes)", hdr.dxfer_len));
+            log(
+                n,
+                &format!("MODE_SENSE page 0x2A ({} bytes)", hdr.dxfer_len),
+            );
         }
         // Page 0x3F: All pages
         0x3F => {
@@ -643,13 +773,19 @@ fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             } else {
                 hdr.write_response(&[]);
             }
-            log(n, &format!("MODE_SENSE page 0x3F (all) ({} bytes)", hdr.dxfer_len));
+            log(
+                n,
+                &format!("MODE_SENSE page 0x3F (all) ({} bytes)", hdr.dxfer_len),
+            );
         }
         _ => {
             // Unsupported page
             hdr.set_check_condition(0x05, 0x24, 0x00);
             save_sense(0x05, 0x24, 0x00);
-            log(n, &format!("MODE_SENSE page 0x{:02X} -> ILLEGAL REQUEST", page));
+            log(
+                n,
+                &format!("MODE_SENSE page 0x{:02X} -> ILLEGAL REQUEST", page),
+            );
         }
     }
 }
@@ -662,8 +798,13 @@ fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 fn cmd_send_key(hdr: &mut SgIoHdr, n: u32) {
     let key_class = hdr.cdb(7);
     let key_format = hdr.cdb(10) & 0x3F;
-    log(n, &format!("SEND_KEY class=0x{:02X} format={} ({} bytes)",
-                     key_class, key_format, hdr.dxfer_len));
+    log(
+        n,
+        &format!(
+            "SEND_KEY class=0x{:02X} format={} ({} bytes)",
+            key_class, key_format, hdr.dxfer_len
+        ),
+    );
 }
 
 // ============================================================================
@@ -690,8 +831,13 @@ fn cmd_report_key(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         }
         _ => {
             hdr.write_response(&[]);
-            log(n, &format!("REPORT_KEY class=0x{:02X} format={} ({} bytes)",
-                             key_class, key_format, hdr.dxfer_len));
+            log(
+                n,
+                &format!(
+                    "REPORT_KEY class=0x{:02X} format={} ({} bytes)",
+                    key_class, key_format, hdr.dxfer_len
+                ),
+            );
         }
     }
 }
@@ -714,16 +860,27 @@ fn cmd_read_disc_structure(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     if let Some(disc) = &profile.disc {
         if let Some(data) = disc.disc_structures.get(&format) {
             hdr.write_response(data);
-            log(n, &format!("READ_DISC_STRUCTURE format={} ({} bytes) from disc", format, data.len()));
+            log(
+                n,
+                &format!(
+                    "READ_DISC_STRUCTURE format={} ({} bytes) from disc",
+                    format,
+                    data.len()
+                ),
+            );
             return;
         }
     }
 
     // Format not available — return empty header (not an error, just no data)
     let mut resp = [0u8; 4];
-    resp[0] = 0x00; resp[1] = 0x02;
+    resp[0] = 0x00;
+    resp[1] = 0x02;
     hdr.write_response(&resp);
-    log(n, &format!("READ_DISC_STRUCTURE format={} -> empty", format));
+    log(
+        n,
+        &format!("READ_DISC_STRUCTURE format={} -> empty", format),
+    );
 }
 
 // ============================================================================
@@ -734,5 +891,8 @@ fn cmd_read_disc_structure(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 fn cmd_set_cd_speed(hdr: &mut SgIoHdr, n: u32) {
     let read_speed = u16::from_be_bytes([hdr.cdb(2), hdr.cdb(3)]);
     let write_speed = u16::from_be_bytes([hdr.cdb(4), hdr.cdb(5)]);
-    log(n, &format!("SET_CD_SPEED read={} write={}", read_speed, write_speed));
+    log(
+        n,
+        &format!("SET_CD_SPEED read={} write={}", read_speed, write_speed),
+    );
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 (2026-04-15)
+
+### API update
+- **libfreemkv 0.9** — updated for Drive object API, `drive.read()` single method
+- **Rust 1.86 MSRV** pinned
+
+## 0.8.0 (2026-04-11)
+
+### libfreemkv API migration
+- Updated for libfreemkv Drive object, typed StreamUrl, public re-exports
+
 ## 0.5.0 (2026-04-09)
 
 ### Emulator

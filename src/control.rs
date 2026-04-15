@@ -28,10 +28,14 @@ pub struct Response {
 
 impl Response {
     pub fn ok(msg: &str) -> Self {
-        Response { lines: vec![format!("OK {}", msg)] }
+        Response {
+            lines: vec![format!("OK {}", msg)],
+        }
     }
     pub fn error(msg: &str) -> Self {
-        Response { lines: vec![format!("ERR {}", msg)] }
+        Response {
+            lines: vec![format!("ERR {}", msg)],
+        }
     }
     pub fn multi(lines: Vec<String>) -> Self {
         Response { lines }
@@ -171,7 +175,9 @@ fn cmd_load(
     // Signal media change to SCSI layer
     crate::scsi::set_media_changed(true);
 
-    let sector_count = prof.disc.as_ref()
+    let sector_count = prof
+        .disc
+        .as_ref()
         .map(|d| d.sectors.len() / 2048)
         .unwrap_or(0);
 
@@ -192,7 +198,11 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let has_sectors = entry.path().join("sectors.bin").exists();
-                let marker = if Some(&name) == st.disc_name.as_ref() { " *" } else { "" };
+                let marker = if Some(&name) == st.disc_name.as_ref() {
+                    " *"
+                } else {
+                    ""
+                };
                 lines.push(format!("  {}{} (sectors={})", name, marker, has_sectors));
             }
         }
