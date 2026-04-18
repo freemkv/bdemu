@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.5 (2026-04-18)
+
+### Version sync
+- Unified version with libfreemkv 0.11.5.
+
 ## 0.11.3 (2026-04-18)
 
 ### Unified versioning
