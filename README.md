@@ -20,7 +20,7 @@ Or build from source: `cargo build --release`
 bdemu capture-disc /dev/sr0 ./testbed/disc
 
 # Emulate a drive and scan the captured disc
-bdemu run --profile profiles/bu40n --disc my_movie -- freemkv disc-info
+bdemu run --profile profiles/bu40n --disc my_movie -- freemkv info disc://
 ```
 
 ## Commands
@@ -41,7 +41,7 @@ Control (while emulator is running):
 
 Examples:
   bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names, ejects
-  bdemu run -p profiles/bu40n -d sample -- ./freemkv disc-info
+  bdemu run -p profiles/bu40n -d sample -- freemkv info disc://
   bdemu validate profiles/bu40n/
 ```
 
@@ -59,7 +59,7 @@ The disc tray ejects automatically when capture completes.
 
 ```bash
 # Capture drive identity (one-time per drive)
-freemkv drive-info --share profiles/my-drive/
+freemkv info disc:// --share
 
 # Capture discs (repeat for each disc)
 bdemu capture-disc /dev/sr0 profiles/my-drive/discs/disc
