@@ -42,7 +42,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bdemu"
-version = "0.11.13"
+version = "0.11.15"
 dependencies = [
  "libc",
  "libfreemkv",
@@ -264,7 +264,7 @@ checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 
 [[package]]
 name = "libfreemkv"
-version = "0.11.13"
+version = "0.11.15"
 dependencies = [
  "aes",
  "base64",
