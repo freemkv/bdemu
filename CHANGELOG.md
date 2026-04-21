@@ -1,9 +1,14 @@
 # Changelog
 
-## 0.11.15 (2026-04-21)
+## 0.11.16 (2026-04-21)
 
 ### Version sync
-- Unified version with libfreemkv 0.11.15.
+- Unified version with libfreemkv 0.11.16.
+
+## 0.11.15 (2026-04-21)
+
+### Version sync + fix
+- Unified version with libfreemkv 0.11.15. Fix read() 4th arg.
 
 ## 0.11.13 (2026-04-21)
 
