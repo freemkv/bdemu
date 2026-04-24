@@ -70,23 +70,25 @@ static REAL_IOCTL: Lazy<RealIoctl> = Lazy::new(|| unsafe {
 /// # Safety
 /// Called by the dynamic linker as an LD_PRELOAD ioctl intercept.
 /// `arg` must be a valid pointer to an `SgIoHdr` when `request` is `SG_IO`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ioctl(
     fd: libc::c_int,
     request: libc::c_ulong,
     arg: *mut libc::c_void,
 ) -> libc::c_int {
+    // Rust 2024: unsafe fn body is not implicitly unsafe; each call-site
+    // needs its own `unsafe { }` block.
     if request != SG_IO || arg.is_null() {
-        return (REAL_IOCTL)(fd, request, arg);
+        return unsafe { (REAL_IOCTL)(fd, request, arg) };
     }
 
     let state = match STATE.as_ref() {
         Some(s) => s,
-        None => return (REAL_IOCTL)(fd, request, arg),
+        None => return unsafe { (REAL_IOCTL)(fd, request, arg) },
     };
 
     let guard = state.profile.lock().unwrap();
-    let hdr = &mut *(arg as *mut SgIoHdr);
+    let hdr = unsafe { &mut *(arg as *mut SgIoHdr) };
     scsi::handle_scsi(hdr, &guard);
     0
 }
