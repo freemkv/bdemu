@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0 (2026-04-24)
+
+### Rust 2024 edition migration
+- Bumped `edition = "2024"`.
+- `#[no_mangle]` → `#[unsafe(no_mangle)]` per 2024 unsafe-attribute rules.
+- `unsafe_op_in_unsafe_fn`: explicit `unsafe { … }` blocks inside the `pub unsafe extern "C" fn ioctl` body.
+- Consumes libfreemkv 0.12.0. No behavior change.
+
 ## 0.11.22 (2026-04-24)
 
 ### Version sync — no functional changes
