@@ -6,8 +6,8 @@
 
 use crate::profile::LoadedProfile;
 use crate::sg::SgIoHdr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static CALL_NUM: AtomicU32 = AtomicU32::new(0);
 static LAST_SENSE: Mutex<[u8; 3]> = Mutex::new([0, 0, 0]); // sense_key, asc, ascq
@@ -754,7 +754,7 @@ fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 let mut resp = [0u8; 28];
                 resp[0] = 0x00;
                 resp[1] = 0x1A; // data length
-                                // Page 2A header
+                // Page 2A header
                 resp[8] = 0x2A;
                 resp[9] = 0x12; // page code, page length
                 resp[10] = 0x3F;
