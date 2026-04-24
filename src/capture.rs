@@ -5,7 +5,7 @@
 // parses UDF to find metadata sector ranges, writes sparse BDSM format.
 // Only captures sectors disc-info needs (~5MB per disc).
 
-use libfreemkv::{scsi, Drive};
+use libfreemkv::{Drive, scsi};
 use std::fs;
 use std::io::Write;
 use std::path::Path;

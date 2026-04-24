@@ -10,7 +10,7 @@ mod sg;
 
 use once_cell::sync::Lazy;
 use profile::LoadedProfile;
-use sg::{SgIoHdr, SG_IO};
+use sg::{SG_IO, SgIoHdr};
 use std::sync::{Arc, Mutex};
 
 struct State {
