@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.21 (2026-04-24)
+
+### Version sync
+- No functional changes. Part of the 0.11.21 ecosystem sync.
+- Consumes libfreemkv 0.11.21.
+
+### License SPDX normalization
+- `Cargo.toml` license field: `AGPL-3.0` → `AGPL-3.0-only`.
+
 ## 0.11.16 (2026-04-21)
 
 ### Version sync
