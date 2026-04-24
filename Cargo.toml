@@ -1,9 +1,9 @@
 [package]
 name = "bdemu"
-version = "0.11.16"
+version = "0.11.21"
 edition = "2021"
 rust-version = "1.86"
-license = "AGPL-3.0"
+license = "AGPL-3.0-only"
 description = "Blu-ray Drive Emulator — LD_PRELOAD SCSI interceptor with JSON profiles"
 repository = "https://github.com/freemkv/bdemu"
 
