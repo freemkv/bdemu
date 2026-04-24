@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0 (2026-04-24)
+
+### Version sync — consume libfreemkv 0.13.0
+No functional changes. libfreemkv 0.13.0's API hygiene pass (English
+elimination, label-purpose enum, dead-code sweep) doesn't touch any
+surface bdemu uses. `Cargo.toml` dep pin `0.12` → `0.13`.
+
 ## 0.12.0 (2026-04-24)
 
 ### Rust 2024 edition migration
