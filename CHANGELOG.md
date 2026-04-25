@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.9 (2026-04-25)
+
+### Version sync — consume libfreemkv 0.13.9
+
+No functional changes.
+
 ## 0.13.8 (2026-04-25)
 
 ### Version sync — consume libfreemkv 0.13.8
