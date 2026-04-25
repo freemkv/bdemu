@@ -42,7 +42,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bdemu"
-version = "0.13.9"
+version = "0.13.10"
 dependencies = [
  "libc",
  "libfreemkv",
@@ -264,9 +264,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libfreemkv"
-version = "0.13.9"
+version = "0.13.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "813e871361b9a2167251f59839175a3ffbf6a67066821937629da88db6531fc3"
+checksum = "77d959ed9eebde48e5a98c1e4e644fd9d654f6a0416d19d45bb1b436e1532c2f"
 dependencies = [
  "aes",
  "base64",
