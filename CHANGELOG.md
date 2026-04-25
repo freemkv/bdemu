@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.3 (2026-04-24)
+
+### Version sync — consume libfreemkv 0.13.3
+No functional changes. libfreemkv 0.13.3 fixes the wedge-signature
+predicate in `drive_has_disc` recovery; bdemu doesn't call that path.
+Cargo.toml dep pin `0.13.2` → `0.13.3`.
+
 ## 0.13.2 (2026-04-24)
 
 ### Version sync — consume libfreemkv 0.13.2
