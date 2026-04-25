@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.2 (2026-04-24)
+
+### Version sync — consume libfreemkv 0.13.2
+No functional changes. libfreemkv 0.13.2's discovery API
+(`list_drives` / `drive_has_disc`) and visibility tightening don't
+touch any surface bdemu uses. Cargo.toml dep pin `0.13` → `0.13.2`.
+
 ## 0.13.0 (2026-04-24)
 
 ### Version sync — consume libfreemkv 0.13.0
