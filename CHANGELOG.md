@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.4 (2026-04-25)
+
+### Version sync — consume libfreemkv 0.13.4
+No functional changes. libfreemkv 0.13.4's scope (drive_has_disc
+recovery rollback + sysfs identity fallback) doesn't touch any
+surface bdemu uses. Cargo.toml dep pin `0.13.3` → `0.13.4`.
+
 ## 0.13.3 (2026-04-24)
 
 ### Version sync — consume libfreemkv 0.13.3
