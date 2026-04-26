@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.20 (2026-04-26)
+
+### Sync release — no functional changes
+
+Bumped to satisfy the unified-versioning rule. Actual changes are in
+libfreemkv (SCSI sync rewrite + API cleanup) and autorip (UI / ETA
+fixes). bdemu doesn't touch the SCSI transport directly, so this is a
+transparent dep bump. The held 0.13.19 dev bundle (never released)
+is folded into this release.
+
+## 0.13.19 (2026-04-26 — held, never released)
+
+Held in development; folded into 0.13.20.
+
 ## 0.13.18 (2026-04-26)
 
 ### Sync release — no functional changes
