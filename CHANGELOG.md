@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.21 (2026-04-26)
+
+### Sync release — picks up libfreemkv 0.13.21 bisect-on-fail
+
+bdemu surface unchanged. The libfreemkv bump fixes the BU40N
+multi-sector read failure that was poisoning `capture-disc` on
+damaged discs.
+
 ## 0.13.20 (2026-04-26)
 
 ### Sync release — no functional changes
