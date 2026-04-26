@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.18 (2026-04-26)
+
+### Sync release — no functional changes
+
+Bumped to satisfy the unified-versioning rule. Actual fix is in autorip
+(`web.rs` two-bar UI). bdemu doesn't render any progress UI, so this
+is a transparent dep bump.
+
 ## 0.13.17 (2026-04-26)
 
 ### Sync release — no functional changes
