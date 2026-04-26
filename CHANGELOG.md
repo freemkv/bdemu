@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.16 (2026-04-26)
+
+### Sync release — consume libfreemkv 0.13.16
+
+No functional changes. Picks up the new `Progress` trait + `PassProgress`
+struct architecture (single progress signal type replacing the leaky
+positional callbacks).
+
 ## 0.13.15 (2026-04-26)
 
 ### Sync release — consume libfreemkv 0.13.15
