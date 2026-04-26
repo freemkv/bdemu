@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.15 (2026-04-26)
+
+### Sync release — consume libfreemkv 0.13.15
+
+bdemu doesn't use Disc::copy / Disc::patch directly, so the
+`on_progress` signature change and the new `PatchOptions::reverse` /
+`wedged_threshold` fields are transparent. No functional changes.
+
 ## 0.13.14 (2026-04-25)
 
 ### Sync release — no functional changes
