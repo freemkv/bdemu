@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.24 (2026-04-27)
+
+### Sync release — picks up libfreemkv 0.13.24 MapStats split + fmt cleanup
+
+No bdemu functional changes; consumes libfreemkv 0.13.24 for ecosystem
+version sync.
+
 ## 0.13.23 (2026-04-27)
 
 ### Sync release — picks up libfreemkv 0.13.23 SCSI sense plumbing
