@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.23 (2026-04-27)
+
+### Sync release — picks up libfreemkv 0.13.23 SCSI sense plumbing
+
+No bdemu functional changes; consumes libfreemkv 0.13.23 for ecosystem
+version sync.
+
 ## 0.13.22 (2026-04-26)
 
 ### Sync release — picks up libfreemkv 0.13.22 hysteresis recovery
