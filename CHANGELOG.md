@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.26 (2026-04-28)
+
+### Sync release — picks up libfreemkv 0.13.32 (hysteresis fix, SgIoTransport recovery)
+
+No bdemu functional changes.
+
 ## 0.13.24 (2026-04-27)
 
 ### Sync release — picks up libfreemkv 0.13.24 MapStats split + fmt cleanup
