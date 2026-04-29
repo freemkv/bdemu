@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.39 (2026-04-28)
+
+### Sync release — picks up libfreemkv 0.13.39
+
+- Picks up ECC-block sweep, mapfile-based recovery, transport-failure abort.
+- No bdemu functional changes.
+
 ## 0.13.26 (2026-04-28)
 
 ### Sync release — picks up libfreemkv 0.13.32 (hysteresis fix, SgIoTransport recovery)
