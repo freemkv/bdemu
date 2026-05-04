@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.0 (2026-05-04)
+
+### Code quality improvements, unified versioning
+
+Sync release across all freemkv crates to version 0.17.0. No bdemu functional changes. See [libfreemkv CHANGELOG](https://github.com/freemkv/libfreemkv/blob/main/CHANGELOG.md#0170-2026-05-04) for details on libfreemkv improvements.
+
 ## 0.13.43 (2026-04-29)
 
 ### Pass 1 transport-failure recovery loop

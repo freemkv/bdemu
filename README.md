@@ -26,7 +26,7 @@ bdemu run --profile profiles/bu40n --disc my_movie -- freemkv info disc://
 ## Commands
 
 ```
-bdemu 0.16.3
+bdemu 0.17.0
 
 Commands:
   run --profile <dir> [--disc <name>] -- <cmd>   Emulate drive, run command
