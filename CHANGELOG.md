@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.7 (2026-05-08)
+
+### Sync release — picks up libfreemkv 0.17.7
+
+Sync release across all freemkv crates to version 0.17.7. No bdemu functional changes. autorip shipped UI smoothness + audit fixes today; bdemu just bumps its `libfreemkv = "0.17"` dep to the latest patch. See [autorip CHANGELOG](https://github.com/freemkv/autorip/blob/main/CHANGELOG.md#0177-2026-05-08) for the user-visible work.
+
 ## 0.17.5 (2026-05-08)
 
 ### Sync release — picks up libfreemkv 0.17.5
