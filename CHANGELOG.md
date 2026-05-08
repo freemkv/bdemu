@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.5 (2026-05-08)
+
+### Sync release — picks up libfreemkv 0.17.5
+
+Sync release across all freemkv crates to version 0.17.5. No bdemu functional changes. Picks up the new `Disc::patch` recovery improvements (kernel `/dev/sr0` pread fallback on Linux, per-range watchdog fix, per-sector range budget). See [libfreemkv CHANGELOG](https://github.com/freemkv/libfreemkv/blob/main/CHANGELOG.md#0175-2026-05-08) for details.
+
 ## 0.17.0 (2026-05-04)
 
 ### Code quality improvements, unified versioning
