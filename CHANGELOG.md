@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.1 (2026-05-09)
+
+### Sync release — picks up libfreemkv 0.18.1
+
+Sync release across all freemkv crates to version 0.18.1. No bdemu
+functional changes — `libfreemkv = "0.17"` → `"0.18"` only. See
+[libfreemkv CHANGELOG](https://github.com/freemkv/libfreemkv/blob/main/CHANGELOG.md#0181-2026-05-09)
+and [autorip CHANGELOG](https://github.com/freemkv/autorip/blob/main/CHANGELOG.md#0181-2026-05-09)
+for the round 1-3 I/O-stack work.
+
 ## 0.17.7 (2026-05-08)
 
 ### Sync release — picks up libfreemkv 0.17.7
