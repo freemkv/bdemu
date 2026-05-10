@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.2 (2026-05-09)
+
+### Sync release — picks up libfreemkv 0.18.2
+
+bdemu doesn't exercise the AACS decrypt path, so the 0.18.2 nav-file
+scramble fix is a no-op here. Version bumped for cross-crate alignment.
+
 ## 0.18.1 (2026-05-09)
 
 ### Sync release — picks up libfreemkv 0.18.1
