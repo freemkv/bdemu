@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.3 (2026-05-09)
+
+### Sync release — picks up libfreemkv 0.18.3
+
+bdemu doesn't exercise the title-sort path; sync-only bump for
+cross-crate alignment.
+
 ## 0.18.2 (2026-05-09)
 
 ### Sync release — picks up libfreemkv 0.18.2
