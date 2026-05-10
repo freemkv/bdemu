@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.4 (2026-05-09)
+
+### Build / CI hardening
+
+- CI workflows now use `cargo build --locked` / `cargo test --locked`.
+  See libfreemkv 0.18.4 for the dependency-race rationale.
+
 ## 0.18.3 (2026-05-09)
 
 ### Sync release — picks up libfreemkv 0.18.3
