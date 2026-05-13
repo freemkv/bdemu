@@ -1,8 +1,8 @@
 [package]
 name = "bdemu"
-version = "0.19.0"
+version = "0.19.1"
 edition = "2024"
-rust-version = "0.19.0"
+rust-version = "1.86"
 license = "AGPL-3.0-only"
 description = "Blu-ray Drive Emulator — LD_PRELOAD SCSI interceptor with JSON profiles"
 repository = "https://github.com/freemkv/bdemu"
@@ -16,7 +16,7 @@ path = "src/bin.rs"
 
 [dependencies]
 libc = "0.2"
-serde = { version = "0.19.0", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 once_cell = "1"
-libfreemkv = "0.18"
+libfreemkv = "0.19"
