@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.25.2 (2026-05-19)
+
+### Changed
+
+- Synchronized to libfreemkv 0.25.2. No behavioural changes;
+  picks up the DTS-HD codec ID + PGS BlockDuration fixes through
+  the dependency caret.
+
+## 0.25.1 (2026-05-19)
+
+### Changed
+
+- Tracks libfreemkv 0.25.1. No behavioural changes in bdemu itself.
+
+## 0.25.0 (2026-05-19)
+
+### Changed
+
+- Tracks libfreemkv 0.25.0 (PES mux highway, `IsoSectorReader`
+  removal, `FREEMKV_THREADS` env rename). bdemu's emulation-side
+  reads were unaffected — the highway is a mux concern, not an
+  emulation one.
+
 ## 0.18.4 (2026-05-09)
 
 ### Build / CI hardening
