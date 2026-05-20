@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.9 (2026-05-20)
+
+### Changed
+
+- Synchronized to libfreemkv 0.25.9. Inherits the MKB record-type
+  fix + built-in AACS 1.0 keys (DVD / BD decryption no longer
+  requires an external keydb.cfg).
+
 ## 0.25.8 (2026-05-20)
 
 ### Changed
