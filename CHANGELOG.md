@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.25.5 (2026-05-20)
+
+### Changed
+
+- Synchronized to libfreemkv 0.25.5. No behavioural changes.
+
 ## 0.25.4 (2026-05-20)
 
 ### Changed
