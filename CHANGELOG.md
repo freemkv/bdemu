@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.8 (2026-05-20)
+
+### Changed
+
+- Synchronized to libfreemkv 0.25.8 (unified versioning bump).
+  No bdemu code changes.
+
 ## 0.25.7 (2026-05-20)
 
 ### Changed
