@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.7 (2026-05-20)
+
+### Changed
+
+- Synchronized to libfreemkv 0.25.7. Inherits the do_handshake
+  wedge fix.
+
 ## 0.25.6 (2026-05-20)
 
 ### Changed
