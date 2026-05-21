@@ -450,7 +450,7 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         if resp.len() >= 16 {
             // Signature at [0:4] from profile database
             resp[0..4].copy_from_slice(&sig);
-            // "MMkv" at [12:16] — universal verification
+            // 4-byte marker at [12:16] — universal verification
             resp[12] = b'M';
             resp[13] = b'M';
             resp[14] = b'k';
