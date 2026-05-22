@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.1 (2026-05-22)
+
+### Changed
+
+- Synchronized to libfreemkv 0.26.1. Inherits the AACS resolver path
+  5 (KEYDB unit-keys direct fallback) for MKBv76+ UHD discs that
+  have unit keys in keydb but no extractable VUK.
+
 ## 0.25.9 (2026-05-20)
 
 ### Changed
