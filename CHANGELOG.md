@@ -452,7 +452,7 @@ Part of the 0.11.22 ecosystem release. Consumes libfreemkv 0.11.22.
 ### Capture
 
 - **Auto-eject**: disc tray opens automatically after capture completes
-- **Auto-rename**: output directory renamed to slugified UDF volume ID (e.g. `disc` -> `dune__part_two`)
+- **Auto-rename**: output directory renamed to slugified UDF volume ID (e.g. `disc` -> `sample_film`)
 - **Collision handling**: appends `_2`, `_3` etc. if name already exists
 - **Fixed sector ranges**: uses updated libfreemkv that captures all JAR/metadata files
 

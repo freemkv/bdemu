@@ -49,7 +49,7 @@ Examples:
 
 `capture-disc` uses libfreemkv to parse the disc's UDF filesystem and capture only the sectors needed for emulation. A typical capture is 15-80 MB instead of 25-90 GB.
 
-After capture, the output directory is automatically renamed to the disc's volume ID (e.g. `disc` becomes `dune__part_two`). If the name already exists, a number is appended (`dune__part_two_2`).
+After capture, the output directory is automatically renamed to the disc's volume ID (e.g. `disc` becomes `sample_film`). If the name already exists, a number is appended (`sample_film_2`).
 
 The disc tray ejects automatically when capture completes.
 
