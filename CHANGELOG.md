@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.31.0 (2026-06-08)
+
+Hardening release for the control channel, capture path, and SCSI handling.
+
+### Fixed
+
+- Control socket: a per-command client read timeout so loading a multi-GB disc
+  image no longer trips a false timeout, while quick commands keep a short
+  timeout; the listener now serves connections concurrently and caps the
+  request line length.
+- Capture: signal-killed children report `128 + signum`; a reused read buffer
+  is re-zeroed on a short transfer; an oversized `sectors.bin` is rejected
+  before a single huge allocation.
+- Argument parsing rejects a missing or flag-shaped value for `--profile` /
+  `--disc`.
+
+### Changed
+
+- Release profile now builds with thin LTO and a single codegen unit.
+
 ## 0.26.1 (2026-05-22)
 
 ### Changed
