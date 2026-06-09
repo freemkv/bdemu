@@ -463,9 +463,16 @@ mod tests {
             let _ = writer.shutdown(std::net::Shutdown::Write);
         });
 
-        let mut resp = String::new();
+        // Read tolerantly: once the server hits its 1 KiB cap it writes the
+        // response and drops the socket, so the client's read can surface
+        // ECONNRESET right after the bytes arrive. `read_to_string` discards
+        // everything on any error (it restores the buffer to keep UTF-8 valid),
+        // which would lose the response and fail the test on a timing race;
+        // `read_to_end` retains the bytes read before the error. Decode lossily.
+        let mut buf = Vec::new();
         let mut reader = client;
-        reader.read_to_string(&mut resp).expect("read response");
+        let _ = reader.read_to_end(&mut buf);
+        let resp = String::from_utf8_lossy(&buf).into_owned();
         let _ = pusher.join();
         worker.join().expect("worker join");
         resp
