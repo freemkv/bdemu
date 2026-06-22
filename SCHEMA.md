@@ -101,7 +101,7 @@ All byte arrays are hex-encoded strings. All fields from real SCSI responses.
 ## Producing
 
 ```
-freemkv drive-info --share > my-drive.json
+freemkv info disc:// --share > my-drive.json
 ```
 
 Sends standard SCSI commands to the drive, captures responses, outputs JSON.
@@ -109,7 +109,7 @@ Sends standard SCSI commands to the drive, captures responses, outputs JSON.
 ## Consuming (bdemu)
 
 ```
-bdemu run --profile my-drive/ -- freemkv disc-info
+bdemu run --profile my-drive/ -- freemkv info disc://
 ```
 
 Intercepts SG_IO, returns responses from the drive profile.

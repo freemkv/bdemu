@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.0-rc.1] - UNRELEASED
+
+Version sync with the rest of the workspace. No functional changes to the
+emulator; inherits libfreemkv 1.0.0-rc.1 as a dependency.
+
 ## 0.31.0 (2026-06-08)
 
 Hardening release for the control channel, capture path, and SCSI handling.
