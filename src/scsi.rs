@@ -69,9 +69,10 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
     // Build DriveId from the emulated drive's INQUIRY + firmware date
     let drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
 
-    // Search libfreemkv's bundled profiles
-    if let Ok(profiles) = libfreemkv::profile::load_bundled() {
-        if let Some(m) = libfreemkv::profile::find_by_drive_id(&profiles, &drive_id) {
+    // Search the LibreDrive bundled profiles (moved out of libfreemkv into
+    // the freemkv-unlock-ld unlocker crate as part of the firmware split).
+    if let Ok(profiles) = freemkv_unlock_ld::profile::load_bundled() {
+        if let Some(m) = freemkv_unlock_ld::profile::find_by_drive_id(&profiles, &drive_id) {
             if m.profile.signature != [0; 4] {
                 log(
                     n,

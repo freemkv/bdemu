@@ -44,6 +44,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bdemu"
 version = "1.0.0-rc.2"
 dependencies = [
+ "freemkv-unlock-ld",
  "libc",
  "libfreemkv",
  "once_cell",
@@ -238,6 +239,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "freemkv-unlock-ld"
+version = "1.0.0-rc.2"
+dependencies = [
+ "base64",
+ "libfreemkv",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,8 +311,6 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "libfreemkv"
 version = "1.0.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee753e4ad4af746feffa1344dd835bd30519b8f092491dce93a3a5c74eab59bf"
 dependencies = [
  "aes",
  "base64",
