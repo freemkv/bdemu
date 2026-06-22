@@ -42,7 +42,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bdemu"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "libc",
  "libfreemkv",
@@ -298,9 +298,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libfreemkv"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "312cd37fc2c828c623705129be4f0fd6fe317decfb2c6a097ad865bd16a332ea"
+checksum = "ee753e4ad4af746feffa1344dd835bd30519b8f092491dce93a3a5c74eab59bf"
 dependencies = [
  "aes",
  "base64",
@@ -405,9 +405,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
