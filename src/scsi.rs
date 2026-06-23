@@ -528,11 +528,9 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let mode = hdr.cdb(1) & 0x1F;
     let buf_id = hdr.cdb(2);
 
-    // Detect unlock CDB patterns:
-    // MT1959-A: mode=1 buf=0x44 len=64
-    // MT1959-B: mode=2 buf=0x77 len=64
-    // Pioneer:  mode=2 buf varies
-    let is_unlock = (mode == 1 && buf_id == 0x44) || (mode == 2 && buf_id == 0x77);
+    // The unlock-handshake CDB shapes are owned by the unlocker crate, not
+    // open-coded here.
+    let is_unlock = freemkv_unlock_ld::cdb::is_unlock_read_buffer(mode, buf_id);
 
     if is_unlock {
         // Look up drive signature from libfreemkv bundled profiles.
@@ -548,11 +546,8 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         if resp.len() >= 16 {
             // Signature at [0:4] from profile database
             resp[0..4].copy_from_slice(&sig);
-            // 4-byte marker at [12:16] — universal verification
-            resp[12] = b'M';
-            resp[13] = b'M';
-            resp[14] = b'k';
-            resp[15] = b'v';
+            // 4-byte verification marker at [12:16] — owned by the unlocker.
+            resp[12..16].copy_from_slice(freemkv_unlock_ld::cdb::UNLOCK_MARKER);
         }
         hdr.write_response(&resp);
         log(
@@ -1355,8 +1350,22 @@ mod tests {
         assert_eq!(unlock_resp_len(0), 0);
     }
 
+    /// Find an unlock (mode, buf_id) pair the unlocker recognises, without
+    /// open-coding the variant CDB bytes here — those internals live in the
+    /// freemkv-unlock-ld crate.
+    fn an_unlock_mode_and_buf() -> (u8, u8) {
+        for mode in 0u8..=0x1F {
+            for buf_id in 0u8..=0xFF {
+                if freemkv_unlock_ld::cdb::is_unlock_read_buffer(mode, buf_id) {
+                    return (mode, buf_id);
+                }
+            }
+        }
+        panic!("the unlocker must recognise at least one unlock READ_BUFFER CDB");
+    }
+
     /// End-to-end: a unlock READ_BUFFER with a normal 64-byte transfer produces
-    /// the "MMkv" marker at [12:16] (signature is [0;4] since empty_profile
+    /// the unlock marker at [12:16] (signature is [0;4] since empty_profile
     /// matches no bundled profile). Confirms the clamped path still serves a
     /// real request — `dxfer_len` here equals the host buffer, the kernel
     /// invariant write_response relies on.
@@ -1365,14 +1374,20 @@ mod tests {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
 
         let profile = empty_profile();
-        // Unlock CDB: READ_BUFFER (0x3C), mode=1 (cdb[1]&0x1F), buf=0x44.
-        let cdb = [0x3Cu8, 0x01, 0x44, 0, 0, 0, 0, 0, 0, 0];
+        // Unlock READ_BUFFER (0x3C); mode = cdb[1]&0x1F, buf = cdb[2], both
+        // sourced from the unlocker's public seam rather than hardcoded.
+        let (mode, buf_id) = an_unlock_mode_and_buf();
+        let cdb = [0x3Cu8, mode, buf_id, 0, 0, 0, 0, 0, 0, 0];
         let mut data = vec![0u8; 64];
         let mut sense = [0u8; 32];
         let mut hdr = hdr_for(&cdb, &mut data, &mut sense);
 
         handle_scsi(&mut hdr, &profile);
 
-        assert_eq!(&data[12..16], b"MMkv", "unlock marker must be written");
+        assert_eq!(
+            &data[12..16],
+            freemkv_unlock_ld::cdb::UNLOCK_MARKER,
+            "unlock marker must be written"
+        );
     }
 }

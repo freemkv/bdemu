@@ -241,7 +241,7 @@ dependencies = [
 [[package]]
 name = "freemkv-unlock-ld"
 version = "1.0.0-rc.3"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.0.0-rc.3#607782ab64a3b2348bcbac069cee1d5ffcc3924b"
+source = "git+https://github.com/freemkv/freemkv-unlock?rev=feacfbb10bf4a197da4b53ab7846efaa181751b6#feacfbb10bf4a197da4b53ab7846efaa181751b6"
 dependencies = [
  "base64",
  "libfreemkv",
