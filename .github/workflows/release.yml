@@ -22,10 +22,15 @@ jobs:
           fi
           echo "Version match: $CARGO_VER"
 
-      - name: Verify Cargo.lock libfreemkv matches tag and is from crates.io
+      # bdemu git-tag-pins libfreemkv via a committed [patch.crates-io] (so the
+      # build starts the instant the libfreemkv tag exists, not after its
+      # crates.io publish). This check asserts the Cargo.lock libfreemkv comes
+      # from THIS release's git tag — not a crates.io registry source or a local
+      # path — and that the direct + transitive (unlock-ld) refs unified to one.
+      - name: Verify Cargo.lock libfreemkv is from the expected git tag
         run: |
-          TAG_VER="${GITHUB_REF_NAME#v}"
-          python3 - "$TAG_VER" <<'PY'
+          TAG="${GITHUB_REF_NAME}"
+          python3 - "$TAG" <<'PY'
           import sys, re
           tag = sys.argv[1]
           try:
@@ -37,12 +42,10 @@ jobs:
           if not text.strip():
               print("::error::Cargo.lock is empty or truncated")
               sys.exit(1)
-          # Split into [[package]] blocks; defend against multiple libfreemkv entries.
           blocks = re.split(r'(?m)^\[\[package\]\]\s*$', text)
           matches = []
           for b in blocks:
-              name_m = re.search(r'(?m)^name\s*=\s*"libfreemkv"\s*$', b)
-              if not name_m:
+              if not re.search(r'(?m)^name\s*=\s*"libfreemkv"\s*$', b):
                   continue
               ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', b)
               src_m = re.search(r'(?m)^source\s*=\s*"([^"]+)"\s*$', b)
@@ -52,31 +55,41 @@ jobs:
               print("::error::Cargo.lock has no libfreemkv entry")
               sys.exit(1)
           if len(matches) > 1:
-              print(f"::error::Cargo.lock has {len(matches)} libfreemkv entries: {matches}")
+              print(f"::error::Cargo.lock has {len(matches)} libfreemkv entries "
+                    f"(direct + transitive not unified by the [patch.crates-io] git redirect): {matches}")
               sys.exit(1)
           lock_ver, lock_src = matches[0]
-          if lock_ver != tag:
-              print(f"::error::Cargo.lock libfreemkv = {lock_ver} but tag is {tag}. "
-                    f"Cause: cargo update --workspace was used instead of the rm+generate-lockfile recipe. "
-                    f"Fix: rm Cargo.lock && cargo +1.86 generate-lockfile (with .cargo/config.toml temporarily disabled).")
+          expected = f"?tag={tag}"
+          if not lock_src or "git+https://github.com/freemkv/libfreemkv" not in lock_src:
+              print(f"::error::Cargo.lock libfreemkv must come from the libfreemkv git repo, "
+                    f"not crates.io or a local path. (saw source={lock_src!r})")
               sys.exit(1)
-          if not lock_src or not lock_src.startswith("registry+https://github.com/rust-lang/crates.io"):
-              print(f"::error::Cargo.lock libfreemkv must come from crates.io registry, not local path. "
-                    f"Run rm Cargo.lock && cargo generate-lockfile with [patch.crates-io] disabled. "
-                    f"(saw source={lock_src!r})")
+          if expected not in lock_src:
+              print(f"::error::Cargo.lock libfreemkv git source is {lock_src!r} but this "
+                    f"release tag is {tag}; expected it to pin {expected}.")
               sys.exit(1)
-          print(f"Cargo.lock libfreemkv = {lock_ver} from {lock_src}")
+          print(f"Cargo.lock libfreemkv = {lock_ver} from {lock_src} (OK)")
           PY
 
-  build:
+  # Tests run as a PARALLEL TRIPWIRE: they fail the run if they fail, but the
+  # build job does NOT `needs:` this job. The tag decision was already gated by
+  # the local precommit (same Rust 1.86, same commit).
+  test:
     needs: verify
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.86.0
-
       - name: Test
         run: cargo test --locked
+
+  build:
+    # NOTE: deliberately does NOT `needs: test` — see the test job above.
+    needs: verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.86.0
 
       - name: Build
         run: cargo build --locked --release
