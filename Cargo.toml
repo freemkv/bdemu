@@ -30,3 +30,14 @@ freemkv-unlock-ld = { git = "https://github.com/freemkv/freemkv-unlock", rev = "
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Resolve libfreemkv from its GIT TAG instead of crates.io, so the release build
+# starts the instant the libfreemkv tag exists — no waiting on the crates.io
+# publish + index propagation. This [patch.crates-io] is committed (CI-visible)
+# and also redirects the transitive libfreemkv that freemkv-unlock-ld pulls from
+# crates.io, unifying both refs to the single git-tag source. The release script
+# (freemkv-private/scripts/release.sh) rewrites this tag to the new version
+# before regenerating Cargo.lock. Local dev overrides it with a path patch via
+# the gitignored .cargo/config.toml.
+[patch.crates-io]
+libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.0.0-rc.3.1" }
