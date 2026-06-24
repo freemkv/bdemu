@@ -1,6 +1,6 @@
 [package]
 name = "bdemu"
-version = "1.0.0-rc.5"
+version = "1.0.0-rc.5.1"
 edition = "2024"
 rust-version = "1.86"
 license = "AGPL-3.0-only"
@@ -24,8 +24,8 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 once_cell = "1"
-libfreemkv = "1.0.0-rc.5"
-freemkv-unlock-ld = { git = "https://github.com/freemkv/freemkv-unlock", rev = "2b5a71422a208c4ecc1a169f31a4f22b11bf8801" }
+libfreemkv = "1.0.0-rc.5.1"
+freemkv-unlock-ld = { git = "https://github.com/freemkv/freemkv-unlock", rev = "50efc5f416aee6e13447b785aa84ffc4ec3dfbcf" }
 
 [profile.release]
 lto = "thin"
@@ -39,4 +39,4 @@ codegen-units = 1
 # rewrites this tag to the new version before regenerating Cargo.lock. Local dev
 # overrides it with a path patch via the gitignored .cargo/config.toml.
 [patch.crates-io]
-libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.0.0-rc.5" }
+libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.0.0-rc.5.1" }
