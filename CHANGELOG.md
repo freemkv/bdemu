@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.0-beta.1] — UNRELEASED
+
+Version sync with the rest of the workspace. No functional changes to the
+emulator; inherits libfreemkv 1.1.0-beta.1.
+
 ## [1.0.0-rc.2]
 
 Version sync with the rest of the workspace. No functional changes to the
