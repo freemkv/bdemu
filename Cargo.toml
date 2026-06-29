@@ -1,6 +1,6 @@
 [package]
 name = "bdemu"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.86"
 license = "AGPL-3.0-only"
@@ -24,7 +24,7 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 once_cell = "1"
-libfreemkv = "1.1"
+libfreemkv = "1.2"
 freemkv-unlock-ld = { git = "https://github.com/freemkv/freemkv-unlock", rev = "b8aa3e68dec0610325242d3363010f6176435658" }
 
 [profile.release]
