@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.0] — 2026-06-28
+## [1.2.0] — 2026-06-29
 
 Version sync with the rest of the workspace. No functional changes to the
 emulator; inherits libfreemkv 1.2.0.
