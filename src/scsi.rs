@@ -66,13 +66,22 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
         })
         .unwrap_or_default();
 
-    // Build DriveId from the emulated drive's INQUIRY + firmware date
-    let drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
+    // Build DriveId from the emulated drive's INQUIRY + firmware date. libfreemkv
+    // owns the INQUIRY parser (`from_inquiry`) and the Display used in the
+    // no-match log; freemkv-unlock's catalog takes its own raw `DriveId`, so map
+    // the four fields across (the two crates' DriveId are deliberately distinct).
+    let lf_drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
+    let drive_id = freemkv_unlock::DriveId {
+        vendor_id: lf_drive_id.vendor_id.clone(),
+        product_revision: lf_drive_id.product_revision.clone(),
+        vendor_specific: lf_drive_id.vendor_specific.clone(),
+        firmware_date: lf_drive_id.firmware_date.clone(),
+    };
 
-    // Search the LibreDrive bundled profiles (moved out of libfreemkv into
-    // the freemkv-unlock-ld unlocker crate as part of the firmware split).
-    if let Ok(profiles) = freemkv_unlock_ld::profile::load_bundled() {
-        if let Some(m) = freemkv_unlock_ld::profile::find_by_drive_id(&profiles, &drive_id) {
+    // Search the LibreDrive bundled profiles via freemkv-unlock's public catalog
+    // API (the single freemkv-unlock crate, same crate libfreemkv depends on).
+    if let Some(profiles) = freemkv_unlock::ld::profiles() {
+        if let Some(m) = profiles.get(&drive_id) {
             if m.profile.signature != [0; 4] {
                 log(
                     n,
@@ -95,7 +104,7 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
             n,
             &format!(
                 "  No profile match for: {} (date={})",
-                drive_id, firmware_date
+                lf_drive_id, firmware_date
             ),
         );
     }
@@ -530,7 +539,7 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 
     // The unlock-handshake CDB shapes are owned by the unlocker crate, not
     // open-coded here.
-    let is_unlock = freemkv_unlock_ld::cdb::is_unlock_read_buffer(mode, buf_id);
+    let is_unlock = freemkv_unlock::ld::is_unlock_read_buffer(mode, buf_id);
 
     if is_unlock {
         // Look up drive signature from libfreemkv bundled profiles.
@@ -547,7 +556,7 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             // Signature at [0:4] from profile database
             resp[0..4].copy_from_slice(&sig);
             // 4-byte verification marker at [12:16] — owned by the unlocker.
-            resp[12..16].copy_from_slice(freemkv_unlock_ld::cdb::UNLOCK_MARKER);
+            resp[12..16].copy_from_slice(freemkv_unlock::ld::UNLOCK_MARKER);
         }
         hdr.write_response(&resp);
         log(
@@ -1356,7 +1365,7 @@ mod tests {
     fn an_unlock_mode_and_buf() -> (u8, u8) {
         for mode in 0u8..=0x1F {
             for buf_id in 0u8..=0xFF {
-                if freemkv_unlock_ld::cdb::is_unlock_read_buffer(mode, buf_id) {
+                if freemkv_unlock::ld::is_unlock_read_buffer(mode, buf_id) {
                     return (mode, buf_id);
                 }
             }
@@ -1386,7 +1395,7 @@ mod tests {
 
         assert_eq!(
             &data[12..16],
-            freemkv_unlock_ld::cdb::UNLOCK_MARKER,
+            freemkv_unlock::ld::UNLOCK_MARKER,
             "unlock marker must be written"
         );
     }
