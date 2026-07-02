@@ -29,7 +29,7 @@ libfreemkv = "1.2"
 # surface (`ld::profiles()` + the unlock-handshake wire format) — the `emulation`
 # feature. Same single freemkv-unlock crate libfreemkv depends on. Interim path
 # dep (mirrors libfreemkv); the release script re-pins to the git tag.
-freemkv-unlock = { git = "https://github.com/freemkv/freemkv-unlock", tag = "v1.2.1", features = ["emulation"] }
+freemkv-unlock = { path = "../freemkv-unlock", features = ["emulation"] }
 
 [profile.release]
 lto = "thin"
