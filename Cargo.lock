@@ -42,9 +42,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bdemu"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
- "freemkv-unlock 1.2.0",
+ "freemkv-unlock",
  "libc",
  "libfreemkv",
  "once_cell",
@@ -240,24 +240,8 @@ dependencies = [
 
 [[package]]
 name = "freemkv-unlock"
-version = "1.2.0"
-dependencies = [
- "aes",
- "base64",
- "num-bigint",
- "num-traits",
- "rand",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tracing",
-]
-
-[[package]]
-name = "freemkv-unlock"
-version = "1.2.0"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.2.0#892e58634076fcb09ec56bc0b919bf3dc1d4e4fe"
+version = "1.2.1"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.2.1#a64e82ad4f3762965f02c26b28ea3b82744a74c2"
 dependencies = [
  "aes",
  "base64",
@@ -332,15 +316,15 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libfreemkv"
-version = "1.2.0"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.2.0#3a4307def66ecb677eb0b9c074e9fd04185259e9"
+version = "1.2.1"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.2.1#e713b26b875b928342f102f19d618778374e730e"
 dependencies = [
  "aes",
  "base64",
  "cbc",
  "cmac",
  "crossbeam-channel",
- "freemkv-unlock 1.2.0 (git+https://github.com/freemkv/freemkv-unlock?tag=v1.2.0)",
+ "freemkv-unlock",
  "libc",
  "memchr",
  "num-bigint",
