@@ -73,6 +73,7 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
     let lf_drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
     let drive_id = freemkv_unlock::DriveId {
         vendor_id: lf_drive_id.vendor_id.clone(),
+        product_id: lf_drive_id.product_id.clone(),
         product_revision: lf_drive_id.product_revision.clone(),
         vendor_specific: lf_drive_id.vendor_specific.clone(),
         firmware_date: lf_drive_id.firmware_date.clone(),
