@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] — 2026-07-08
+
+Version sync with the rest of the workspace; inherits libfreemkv 1.3.0.
+
+### Changed
+
+- Wires the drive's `product_id` into the emulated `DriveId` (new field on
+  `freemkv_unlock::DriveId`).
+
 ## [1.2.0] — 2026-06-29
 
 Version sync with the rest of the workspace. No functional changes to the
