@@ -1,5 +1,5 @@
 // bdemu — Blu-ray Drive Emulator CLI
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // Usage:
 //   bdemu capture-disc /dev/sg4 profiles/bu40n/discs/my_disc/

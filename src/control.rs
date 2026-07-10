@@ -1,5 +1,5 @@
 // bdemu — Control socket for runtime interaction
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // The LD_PRELOAD library listens on a Unix socket for commands.
 // The CLI binary sends commands to control the running emulator.

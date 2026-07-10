@@ -1,5 +1,5 @@
 // bdemu — Blu-ray Drive Emulator
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // Linux SG_IO bindings
 

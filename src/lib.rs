@@ -1,5 +1,5 @@
 // bdemu — Blu-ray Drive Emulator
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // LD_PRELOAD entry point — intercepts ioctl(SG_IO) calls
 

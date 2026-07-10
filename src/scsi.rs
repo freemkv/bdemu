@@ -1,5 +1,5 @@
 // bdemu — Blu-ray Drive Emulator
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // MMC-6 / SPC-4 compliant SCSI command handlers
 // Reference: MMC-6 (mmc6r02g.pdf), SPC-4, SBC-3
