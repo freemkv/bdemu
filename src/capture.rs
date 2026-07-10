@@ -1,5 +1,5 @@
 // bdemu — Blu-ray Drive Emulator
-// AGPL-3.0 — freemkv project
+// MIT — freemkv project
 //
 // Smart disc capture — uses libfreemkv to open/unlock the drive,
 // parses UDF to find metadata sector ranges, writes sparse BDSM format.
