@@ -44,7 +44,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bdemu"
 version = "1.4.4"
 dependencies = [
- "freemkv-unlock 1.4.4",
+ "freemkv-unlock",
  "libc",
  "libfreemkv",
  "once_cell",
@@ -255,23 +255,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "freemkv-unlock"
-version = "1.4.4"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.4.4#c5cf5e6a0c5e7806edcc1f2de46427e3bdd436b6"
-dependencies = [
- "aes",
- "base64",
- "num-bigint",
- "num-traits",
- "rand",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tracing",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,14 +316,13 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "libfreemkv"
 version = "1.4.4"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.4.4#93571d9181c6ebb5dd0c71dfa147b7c3884a7a90"
 dependencies = [
  "aes",
  "base64",
  "cbc",
  "cmac",
  "crossbeam-channel",
- "freemkv-unlock 1.4.4 (git+https://github.com/freemkv/freemkv-unlock?tag=v1.4.4)",
+ "freemkv-unlock",
  "libc",
  "memchr",
  "num-bigint",
@@ -719,3 +701,11 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
+
+[[patch.unused]]
+name = "freemkv-i18n"
+version = "1.4.4"
+
+[[patch.unused]]
+name = "freemkv-keysources"
+version = "1.4.4"
