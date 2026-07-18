@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.5] — 2026-07-18
+
+Version sync with the workspace; inherits libfreemkv 1.4.5.
+
+## [1.4.4] — 2026-07-17
+
+Version sync with the workspace; inherits libfreemkv 1.4.4.
+
+## [1.4.3] — 2026-07-17
+
+Version sync with the workspace; inherits libfreemkv 1.4.3.
+
 ## [1.4.2] — 2026-07-15
 
 Version sync with the workspace; inherits libfreemkv 1.4.2.
