@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.2] — UNRELEASED
+
+Version sync with the workspace. No functional change.
+
 ## [1.4.5] — 2026-07-18
 
 Version sync with the workspace; inherits libfreemkv 1.4.5.
