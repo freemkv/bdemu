@@ -31,7 +31,7 @@ jobs:
           sed -i "s|/download/v[0-9]*\.[0-9]*\.[0-9]*/|/download/${VERSION}/|g" "$FILE"
 
           # Update version in example output
-          sed -i "s|bdemu [0-9]*\.[0-9]*\.[0-9]*|bdemu ${VERSION#v}|g" "$FILE"
+          sed -i "s|bdemu [0-9]*\.[0-9]*\.[0-9]*\(-[0-9A-Za-z.]*\)\{0,1\}|bdemu ${VERSION#v}|g" "$FILE"
           sed -i "s|freemkv [0-9]*\.[0-9]*\.[0-9]*|freemkv ${VERSION#v}|g" "$FILE"
 
       - name: Commit and push
