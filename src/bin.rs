@@ -242,7 +242,7 @@ fn usage() {
     println!(
         "  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture + auto-name (add --eject to eject)"
     );
-    println!("  bdemu run -p profiles/bu40n -d sample -- ./freemkv disc-info");
+    println!("  bdemu run -p profiles/bu40n -d sample -- ./freemkv info");
     println!("  bdemu validate profiles/bu40n/");
     println!();
     println!("https://github.com/freemkv/bdemu");

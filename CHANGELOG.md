@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.0] — UNRELEASED
+
+Version sync with the workspace. No functional change.
+
 ## [1.5.2] — 2026-07-22
 
 Version sync with the workspace. No functional change.
