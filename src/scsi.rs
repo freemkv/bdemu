@@ -82,23 +82,23 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
     // Search the LibreDrive bundled profiles via freemkv-unlock's public catalog
     // API (the single freemkv-unlock crate, same crate libfreemkv depends on).
     if let Some(profiles) = freemkv_unlock::ld::profiles() {
-        if let Some(m) = profiles.get(&drive_id) {
-            if m.profile.signature != [0; 4] {
-                log(
-                    n,
-                    &format!(
-                        "  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
-                        m.profile.identity.vendor_id.trim(),
-                        m.profile.identity.vendor_specific.trim(),
-                        m.profile.identity.product_revision.trim(),
-                        m.profile.signature[0],
-                        m.profile.signature[1],
-                        m.profile.signature[2],
-                        m.profile.signature[3]
-                    ),
-                );
-                return m.profile.signature;
-            }
+        if let Some(m) = profiles.get(&drive_id)
+            && m.profile.signature != [0; 4]
+        {
+            log(
+                n,
+                &format!(
+                    "  Profile matched: {} {} {} (sig={:02x}{:02x}{:02x}{:02x})",
+                    m.profile.identity.vendor_id.trim(),
+                    m.profile.identity.vendor_specific.trim(),
+                    m.profile.identity.product_revision.trim(),
+                    m.profile.signature[0],
+                    m.profile.signature[1],
+                    m.profile.signature[2],
+                    m.profile.signature[3]
+                ),
+            );
+            return m.profile.signature;
         }
         // No match — log clearly
         log(
@@ -351,15 +351,15 @@ fn cmd_prevent_allow_removal(hdr: &mut SgIoHdr, n: u32) {
 // Returns last LBA and block size.
 
 fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
-    if let Some(disc) = &profile.disc {
-        if !disc.capacity.is_empty() {
-            hdr.write_response(&disc.capacity);
-            log(
-                n,
-                &format!("READ_CAPACITY ({} bytes) from disc", hdr.dxfer_len),
-            );
-            return;
-        }
+    if let Some(disc) = &profile.disc
+        && !disc.capacity.is_empty()
+    {
+        hdr.write_response(&disc.capacity);
+        log(
+            n,
+            &format!("READ_CAPACITY ({} bytes) from disc", hdr.dxfer_len),
+        );
+        return;
     }
 
     if !profile.has_disc() {
@@ -639,12 +639,12 @@ fn cmd_read_toc(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         return;
     }
 
-    if let Some(disc) = &profile.disc {
-        if !disc.toc.is_empty() {
-            hdr.write_response(&disc.toc);
-            log(n, &format!("READ_TOC ({} bytes) from disc", hdr.dxfer_len));
-            return;
-        }
+    if let Some(disc) = &profile.disc
+        && !disc.toc.is_empty()
+    {
+        hdr.write_response(&disc.toc);
+        log(n, &format!("READ_TOC ({} bytes) from disc", hdr.dxfer_len));
+        return;
     }
 
     // Default minimal TOC
@@ -836,15 +836,15 @@ fn cmd_read_disc_info(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         return;
     }
 
-    if let Some(disc) = &profile.disc {
-        if !disc.disc_info.is_empty() {
-            hdr.write_response(&disc.disc_info);
-            log(
-                n,
-                &format!("READ_DISC_INFO ({} bytes) from disc", disc.disc_info.len()),
-            );
-            return;
-        }
+    if let Some(disc) = &profile.disc
+        && !disc.disc_info.is_empty()
+    {
+        hdr.write_response(&disc.disc_info);
+        log(
+            n,
+            &format!("READ_DISC_INFO ({} bytes) from disc", disc.disc_info.len()),
+        );
+        return;
     }
 
     // Default
@@ -1009,19 +1009,19 @@ fn cmd_read_disc_structure(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 
     let format = hdr.cdb(7);
 
-    if let Some(disc) = &profile.disc {
-        if let Some(data) = disc.disc_structures.get(&format) {
-            hdr.write_response(data);
-            log(
-                n,
-                &format!(
-                    "READ_DISC_STRUCTURE format={} ({} bytes) from disc",
-                    format,
-                    data.len()
-                ),
-            );
-            return;
-        }
+    if let Some(disc) = &profile.disc
+        && let Some(data) = disc.disc_structures.get(&format)
+    {
+        hdr.write_response(data);
+        log(
+            n,
+            &format!(
+                "READ_DISC_STRUCTURE format={} ({} bytes) from disc",
+                format,
+                data.len()
+            ),
+        );
+        return;
     }
 
     // Format not available — return empty header (not an error, just no data)
