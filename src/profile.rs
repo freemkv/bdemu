@@ -244,12 +244,12 @@ impl LoadedProfile {
                 let fname = entry.file_name().to_string_lossy().to_string();
                 if fname.starts_with("rb_") && fname.ends_with(".bin") {
                     let id_str = &fname[3..fname.len() - 4];
-                    if let Ok(id) = u8::from_str_radix(id_str, 16) {
-                        if !read_bufs.iter().any(|(i, _)| *i == id) {
-                            let data = read_bin(&entry.path());
-                            if !data.is_empty() {
-                                read_bufs.push((id, data));
-                            }
+                    if let Ok(id) = u8::from_str_radix(id_str, 16)
+                        && !read_bufs.iter().any(|(i, _)| *i == id)
+                    {
+                        let data = read_bin(&entry.path());
+                        if !data.is_empty() {
+                            read_bufs.push((id, data));
                         }
                     }
                 }

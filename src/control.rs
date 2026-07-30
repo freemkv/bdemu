@@ -372,7 +372,7 @@ fn cmd_load(
 /// Flat images have an empty map and fall back to length/2048.
 fn disc_sector_count(d: &crate::profile::DiscProfile) -> usize {
     if d.sector_map.is_empty() {
-        if d.sectors.len() % 2048 != 0 {
+        if !d.sectors.len().is_multiple_of(2048) {
             eprintln!(
                 "bdemu: sectors.bin length {} is not a multiple of 2048 (truncated capture?)",
                 d.sectors.len()
