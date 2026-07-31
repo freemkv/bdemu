@@ -101,10 +101,14 @@ All byte arrays are hex-encoded strings. All fields from real SCSI responses.
 ## Producing
 
 ```
-freemkv info disc:// --share > my-drive.json
+freemkv info disc:// --share
 ```
 
-Sends standard SCSI commands to the drive, captures responses, outputs JSON.
+Sends standard SCSI commands to the drive and captures the responses. It writes a
+profile directory named `<vendor>-<product>-<rev>-<serial>/` into the current
+directory (plus a `profile.zip` of the same), and prints a ready-to-paste GitHub
+issue body to stdout. The JSON described by this schema is the profile inside
+that directory — not the printed text, so do not redirect stdout to a `.json`.
 
 ## Consuming (bdemu)
 
