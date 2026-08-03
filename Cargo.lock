@@ -207,20 +207,20 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "either"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
 name = "equivalent"
@@ -241,6 +241,7 @@ dependencies = [
 [[package]]
 name = "freemkv-unlock"
 version = "1.6.0"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.6.0#6cc23cf09b94f20c0e96345f90514c74ff80574b"
 dependencies = [
  "aes",
  "base64",
@@ -316,6 +317,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "libfreemkv"
 version = "1.6.0"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.6.0#bab566da40e53cdc9905ec952961b23924b1202c"
 dependencies = [
  "aes",
  "base64",
@@ -712,11 +714,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "freemkv-i18n"
-version = "1.6.0"
-
-[[patch.unused]]
-name = "freemkv-keysources"
-version = "1.6.0"
