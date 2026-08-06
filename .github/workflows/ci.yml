@@ -2,10 +2,12 @@ name: CI
 
 on:
   push:
-    # `dev` is where work lands and where CI must be green. `main` only ever
-    # moves at release time, to the tagged commit, so a push to it is the
-    # release validation run rather than day-to-day feedback.
-    branches: [main, dev]
+    # dev -> qa -> main. `dev` is where work lands and is meant to be pushed
+    # to often: these are the FAST checks, so a mistake surfaces in minutes.
+    # `qa` is the release candidate — it runs these too, plus the expensive
+    # suite in qa.yml. `main` only ever moves at release time, to a tagged
+    # commit that was already green on qa.
+    branches: [main, dev, qa]
   pull_request:
 
 # WHY THE SIBLING CHECKOUTS — this is NOT a monorepo.
@@ -54,12 +56,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: freemkv/libfreemkv
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
       - uses: actions/checkout@v5
         with:
           repository: freemkv/freemkv-unlock
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: freemkv-unlock
       - name: Resolve siblings from their dev tips
         shell: bash
@@ -91,12 +93,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: freemkv/libfreemkv
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
       - uses: actions/checkout@v5
         with:
           repository: freemkv/freemkv-unlock
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: freemkv-unlock
       - name: Resolve siblings from their dev tips
         shell: bash
@@ -127,12 +129,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: freemkv/libfreemkv
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
       - uses: actions/checkout@v5
         with:
           repository: freemkv/freemkv-unlock
-          ref: dev
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: freemkv-unlock
       - name: Resolve siblings from their dev tips
         shell: bash
