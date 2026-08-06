@@ -92,9 +92,6 @@ jobs:
           cat > .cargo/config.toml <<'EOF'
           [patch.crates-io]
           libfreemkv = { path = "../libfreemkv" }
-          freemkv-keysources = { path = "../freemkv-keysources" }
-          freemkv-engine = { path = "../freemkv-engine" }
-          freemkv-i18n = { path = "../freemkv-i18n" }
           EOF
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
@@ -130,9 +127,6 @@ jobs:
           cat > .cargo/config.toml <<'EOF'
           [patch.crates-io]
           libfreemkv = { path = "../libfreemkv" }
-          freemkv-keysources = { path = "../freemkv-keysources" }
-          freemkv-engine = { path = "../freemkv-engine" }
-          freemkv-i18n = { path = "../freemkv-i18n" }
           EOF
       - uses: dtolnay/rust-toolchain@1.97.0
         with:
