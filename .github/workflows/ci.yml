@@ -50,15 +50,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/libfreemkv
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/freemkv-unlock
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
@@ -87,15 +87,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/libfreemkv
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/freemkv-unlock
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
@@ -123,15 +123,15 @@ jobs:
   release-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/libfreemkv
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
           path: libfreemkv
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: freemkv/freemkv-unlock
           ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
