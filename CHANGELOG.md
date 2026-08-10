@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.3] — 2026-08-10
+
+### Changed
+
+- **No functional change.** This crate ships alongside the rest of freemkv at a
+  matching version. Its build and release checks were updated; drive emulation
+  is untouched.
+
 ## [1.6.2] — 2026-08-08
 
 Version sync with the workspace. No functional change in this crate.
