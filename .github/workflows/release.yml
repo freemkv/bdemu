@@ -114,7 +114,7 @@ jobs:
           tar czf "bdemu-x86_64-linux.tar.gz" "$DIR"
 
       - name: Upload
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: '*.tar.gz'
 
