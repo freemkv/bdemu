@@ -232,6 +232,7 @@ dependencies = [
 [[package]]
 name = "freemkv-unlock"
 version = "1.6.4"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.6.4#719a226dba88c914fad4398086ecbfe25bda748b"
 dependencies = [
  "aes",
  "base64",
@@ -316,6 +317,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "libfreemkv"
 version = "1.6.4"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.6.4#d3103453f1da9b982e76f1c3d448e5f5b3c572ca"
 dependencies = [
  "aes",
  "base64",
@@ -367,9 +369,9 @@ dependencies = [
 
 [[package]]
 name = "num-integer"
-version = "0.1.46"
+version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
 dependencies = [
  "num-traits",
 ]
@@ -647,15 +649,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "freemkv-engine"
-version = "1.6.4"
-
-[[patch.unused]]
-name = "freemkv-i18n"
-version = "1.6.4"
-
-[[patch.unused]]
-name = "freemkv-keysources"
-version = "1.6.4"
