@@ -437,7 +437,7 @@ fn scsi_save(
 
 #[cfg(test)]
 mod tests {
-    use super::{fixture_result, next_chunk, zero_fill_tail};
+    use super::{fixture_result, next_chunk, slugify, zero_fill_tail};
 
     #[test]
     fn short_read_zeroes_stale_tail() {
@@ -530,5 +530,45 @@ mod tests {
         assert_eq!(next_chunk(0, 32, 32), 32);
         // A large remaining count clamps to `chunk`.
         assert_eq!(next_chunk(0, 1_000_000, 32), 32);
+    }
+    /// `slugify` turns a disc's UDF volume ID — a string read off an untrusted
+    /// disc — into the directory name the capture is renamed to, so it is the one
+    /// place a hostile volume ID could try to escape the output directory. It maps
+    /// every non-alphanumeric character to `_`, which makes traversal impossible
+    /// by construction (`.` and `/` cannot survive), and this test pins that
+    /// property: it catches any mutation that starts preserving separators or dots
+    /// (e.g. "allow `.` and `-` for nicer names"), which would turn
+    /// `../../etc/cron.d` into a real path again.
+    #[test]
+    fn slugify_cannot_produce_a_traversing_name() {
+        // The traversal attempt collapses to a plain component.
+        assert_eq!(slugify("../../etc"), "etc");
+        assert_eq!(slugify("/etc/passwd"), "etc_passwd");
+        assert_eq!(slugify(".."), "");
+        assert_eq!(slugify("a/../b"), "a____b");
+        // No separator or dot ever survives, whatever the input.
+        for hostile in ["../x", "..\\x", "a/b", "a.b", "~/x", "$HOME", "a\0b"] {
+            let s = slugify(hostile);
+            assert!(
+                !s.contains('/') && !s.contains('\\') && !s.contains('.') && !s.contains('\0'),
+                "slugify({hostile:?}) = {s:?} must not carry a path character"
+            );
+        }
+    }
+
+    /// The everyday behaviour the rename depends on: lowercasing, `_` for spaces
+    /// and punctuation, and no leading/trailing underscores (so `sample_film`, not
+    /// `_sample_film_`). Catches a mutation that drops the trim or the lowercasing
+    /// and silently changes every captured directory's name.
+    #[test]
+    fn slugify_normalises_ordinary_volume_ids() {
+        assert_eq!(slugify("SAMPLE FILM"), "sample_film");
+        assert_eq!(slugify("Amélie 2001"), "am_lie_2001");
+        assert_eq!(slugify("  Spaced  "), "spaced");
+        assert_eq!(slugify("THX-1138"), "thx_1138");
+        // An all-punctuation volume ID slugifies to nothing, which capture_disc
+        // treats as "no usable name" and skips the rename for.
+        assert_eq!(slugify("***"), "");
+        assert_eq!(slugify(""), "");
     }
 }

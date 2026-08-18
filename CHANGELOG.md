@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A read the fixture cannot satisfy is no longer reported as success.**
+  READ(10)/READ(12) returned GOOD status with a zero-filled buffer whenever the
+  requested LBA was outside the captured sector map, past the end of a legacy
+  flat dump, or backed by a `sectors.bin` that was missing, empty or unreadable —
+  with a log line identical to a real hit. A caller could not tell emulated disc
+  content from nothing at all. Uncaptured sectors now fail with CHECK CONDITION /
+  MEDIUM ERROR / UNRECOVERED READ ERROR (0x03/0x11/0x00). Sectors that ARE inside
+  a captured BDSM range are still served verbatim, including genuinely zero ones.
+- **Profile blobs that fail to load are logged.** Every read error except an
+  oversized file used to collapse to an empty blob with no diagnostic; only a
+  genuinely absent (optional) file is silent now.
+- **The control socket is no longer stolen.** A second `bdemu run` unlinked the
+  first instance's socket and quietly took over every `load`/`eject`/`status`.
+  bdemu now refuses to bind over a live socket (stale sockets are still
+  reclaimed), and `BDEMU_INSTANCE=<id>` gives concurrent emulators their own
+  sockets.
+- **`bdemu validate` checks blob sizes, not mere existence.** A zero-byte
+  `sectors.bin` from an interrupted capture used to validate clean and exit 0.
+- **Terminal-escape injection from third-party profiles.** `bdemu validate` and
+  `list-discs` printed profile-derived strings (INQUIRY vendor/product, serial,
+  firmware date, disc directory names) unfiltered; control characters are now
+  replaced before display.
+- **READ BUFFER answers unimplemented modes honestly.** Mode 0 and other
+  unimplemented modes returned an empty GOOD response; they now return ILLEGAL
+  REQUEST / INVALID FIELD IN CDB. The header comment claiming mode 0 was
+  implemented is corrected.
+- **Docs:** the README said `capture-disc` ejects automatically in three places;
+  eject has been opt-in behind `--eject` (now documented) since the flag was
+  added.
+
 ## [1.6.4] — 2026-08-15
 
 ### Changed

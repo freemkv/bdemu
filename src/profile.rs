@@ -7,6 +7,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+/// Logical block size of every optical medium bdemu emulates, and the unit the
+/// BDSM sector map, the flat legacy dump and every READ(10)/READ(12) transfer are
+/// expressed in. It was an inline `2048` in the sector-map parser, the READ
+/// handler, the sector-map lookup and the disc-size accounting; a named constant
+/// keeps those four in step (and makes it obvious that a `/ 2048` there is a
+/// sector count, not an arbitrary block).
+pub const SECTOR_SIZE: usize = 2048;
+
 /// Loaded profile with raw bytes ready to serve
 pub struct LoadedProfile {
     pub name: String,
@@ -72,7 +80,7 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
             // `data`; otherwise lookup_sector + the READ handler would slice
             // out of bounds and panic mid-session. Bail to the flat fallback
             // on overflow or truncation rather than building a poisoned map.
-            let span = match (count as usize).checked_mul(2048) {
+            let span = match (count as usize).checked_mul(SECTOR_SIZE) {
                 Some(s) => s,
                 None => return (data, Vec::new()),
             };
@@ -528,25 +536,55 @@ const MAX_BIN_BYTES: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
 /// Read a profile blob into memory, refusing files past `MAX_BIN_BYTES`.
 ///
-/// Stats first so an oversized (or hostile) file is rejected before the
-/// allocation, rather than `fs::read` growing an unbounded Vec to OOM. A missing
-/// file, stat failure, or oversized file all yield an empty Vec — callers already
-/// treat absent blobs as "feature not present", and an oversized blob is logged
-/// so the misconfiguration is visible rather than silent.
-fn read_bin(path: &Path) -> Vec<u8> {
+/// Returns `Ok(empty)` for a blob that is genuinely ABSENT — callers treat an
+/// empty Vec as "this feature is not present in the profile", and profiles
+/// legitimately omit rpc_state.bin, mode_2a.bin, sector_data.bin and so on.
+/// Every OTHER failure (EACCES, EIO, a directory where a file was expected, an
+/// oversized blob) returns `Err` with a message the caller logs.
+///
+/// That split is the whole point. The previous `_ => fs::read(path)
+/// .unwrap_or_default()` collapsed EVERY error into an empty Vec with no log, so
+/// an unreadable `discs/<n>/sectors.bin` was indistinguishable from a profile
+/// that simply has no sectors — and READ(10) then served 2048 zero bytes per
+/// sector at GOOD status. A rip could complete "successfully" against a profile
+/// the process could not actually read. Only the >16 GiB case was ever logged.
+///
+/// Stat first so an oversized (or hostile) file is rejected before the
+/// allocation, rather than `fs::read` growing an unbounded Vec to OOM.
+fn read_bin_reported(path: &Path) -> Result<Vec<u8>, String> {
     match fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_BIN_BYTES => {
-            eprintln!(
-                "bdemu: refusing to load {} ({} bytes exceeds the {}-byte cap)",
-                path.display(),
-                meta.len(),
-                MAX_BIN_BYTES
-            );
+        Ok(meta) if meta.len() > MAX_BIN_BYTES => Err(format!(
+            "refusing to load {} ({} bytes exceeds the {}-byte cap)",
+            path.display(),
+            meta.len(),
+            MAX_BIN_BYTES
+        )),
+        // Stat failed: fall through to fs::read so the error the caller sees is
+        // the one that actually matters (and so a file created between the two
+        // calls is still read).
+        _ => match fs::read(path) {
+            Ok(data) => Ok(data),
+            // The one benign failure: the blob is simply not part of this
+            // profile. Silent, because profiles legitimately omit optional files
+            // and logging every absence would drown the real diagnostics.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("cannot read {}: {}", path.display(), e)),
+        },
+    }
+}
+
+/// `read_bin_reported` with the failure logged and mapped to the empty-Vec
+/// "not present" convention every caller already understands. The log is the
+/// contract: a blob that failed to load for any reason other than absence must
+/// leave a trace, so a zero-filled read later in the session can be traced back
+/// to its cause instead of looking like genuine disc content.
+fn read_bin(path: &Path) -> Vec<u8> {
+    match read_bin_reported(path) {
+        Ok(data) => data,
+        Err(msg) => {
+            eprintln!("bdemu: {}", msg);
             Vec::new()
         }
-        // Stat failed (missing/perms): fall through to fs::read, which returns the
-        // same Err that unwrap_or_default already maps to an empty Vec.
-        _ => fs::read(path).unwrap_or_default(),
     }
 }
 
@@ -604,7 +642,10 @@ fn parse_u16_opt(s: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sector_file, parse_toml_value, parse_u16_opt, safe_disc_dir};
+    use super::{
+        LoadedProfile, parse_sector_file, parse_toml_value, parse_u16_opt, read_bin_reported,
+        safe_disc_dir,
+    };
 
     /// A per-test scratch directory under the crate's `target/` (never /tmp, per
     /// the project no-/tmp scratch rule). CARGO_MANIFEST_DIR is always set at
@@ -844,5 +885,73 @@ mod tests {
         );
         // Exactly one feature survived.
         assert_eq!(profile.features.len(), 1);
+    }
+    /// A blob that is genuinely absent is the documented "feature not present"
+    /// case and stays silent, but every OTHER read failure must be reported.
+    ///
+    /// Catches the mutation that restores `_ => fs::read(path).unwrap_or_default()`:
+    /// with it, an unreadable `sectors.bin` (EACCES, EIO, or — as exercised here —
+    /// a directory where a file was expected) returns an empty Vec with no log and
+    /// is indistinguishable from a profile that simply has no sectors. That was
+    /// the direct enabler of READ(10) serving zeros at GOOD status.
+    #[test]
+    fn unreadable_blob_is_reported_while_absent_blob_is_silent() {
+        let dir = test_scratch_dir("read_bin_reported");
+
+        // Absent: Ok(empty), no error — profiles legitimately omit optional blobs.
+        let missing = dir.join("not_here.bin");
+        assert_eq!(
+            read_bin_reported(&missing).expect("absent blob must not be an error"),
+            Vec::<u8>::new()
+        );
+
+        // Present and readable: the bytes come back.
+        let good = dir.join("good.bin");
+        std::fs::write(&good, b"abc").unwrap();
+        assert_eq!(read_bin_reported(&good).unwrap(), b"abc".to_vec());
+
+        // Unreadable (a directory in a file's place — an EISDIR that stat cannot
+        // catch): must be an Err naming the path, NOT a silent empty Vec.
+        let as_dir = dir.join("sectors.bin");
+        std::fs::create_dir_all(&as_dir).unwrap();
+        let err = read_bin_reported(&as_dir).expect_err("unreadable blob must report");
+        assert!(
+            err.contains("sectors.bin"),
+            "the message must name the blob: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A profile directory holding only `drive.toml` — every binary blob missing —
+    /// must still load, with each absent blob presenting as empty rather than
+    /// failing the whole profile or panicking on a missing file. This is the
+    /// coverage gap for `LoadedProfile::load` on an incomplete profile (the shape
+    /// `bdemu validate` exists to warn about).
+    #[test]
+    fn profile_loads_with_every_blob_missing() {
+        let dir = test_scratch_dir("profile_missing_blobs");
+        std::fs::write(
+            dir.join("drive.toml"),
+            "[drive]\nproduct = \"BDR-S09\"\ncurrent_profile = 0x0043\n\
+             [files]\ninquiry = \"inquiry.bin\"\nrpc_state = \"rpc_state.bin\"\n\
+             [features]\n0x0108 = \"gc_0108.bin\"\n",
+        )
+        .unwrap();
+
+        let p = LoadedProfile::load(dir.to_str().unwrap()).expect("must still load");
+        assert_eq!(p.name, "BDR-S09");
+        assert_eq!(p.current_profile, 0x0043);
+        assert!(p.inquiry.is_empty(), "absent inquiry.bin -> empty");
+        assert!(p.rpc_state.is_empty(), "absent rpc_state.bin -> empty");
+        assert!(p.mode_2a.is_empty(), "absent mode_2a.bin -> empty");
+        // A feature whose file is missing must be DROPPED, not registered with an
+        // empty payload: GET CONFIGURATION would otherwise answer an existing-but-
+        // zero-length feature descriptor for it.
+        assert!(p.features.is_empty(), "features with no file are dropped");
+        assert!(p.read_bufs.is_empty());
+        assert!(!p.has_disc(), "no BDEMU_DISC set -> no disc");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
