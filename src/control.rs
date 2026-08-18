@@ -4,44 +4,25 @@
 // The LD_PRELOAD library listens on a Unix socket for commands.
 // The CLI binary sends commands to control the running emulator.
 
+use crate::profile::SECTOR_SIZE;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Path to the control socket: the per-user runtime dir (mode 0700 on Linux) so
-/// the socket is never world-accessible. The control socket accepts load/eject/
-/// status commands, so a world-writable `/tmp/bdemu.sock` would let any local
-/// user drive the emulator (and race a setup TOCTOU); we therefore REFUSE the
-/// insecure /tmp fallback. If $XDG_RUNTIME_DIR is unset/empty, return an error
-/// instructing the user to set it rather than silently binding in /tmp.
-///
-// The control socket filename is shared with bin.rs via a #[path] include so
-// the one field that could realistically drift between the two duplicated
-// socket_path implementations lives in exactly one place.
+// The control-socket path policy (private per-user runtime dir, refusal of the
+// insecure /tmp fallback, and the per-instance socket name) is shared with the
+// CLI binary via a `#[path]` include so the bind side here and the connect side
+// in bin.rs cannot drift apart.
 #[path = "socket_name.rs"]
 mod socket_name;
-pub use socket_name::SOCKET_FILENAME;
+pub use socket_name::socket_path;
 
-/// This MUST match `socket_path()` in bin.rs.
-pub fn socket_path() -> Result<PathBuf, String> {
-    socket_path_from(std::env::var("XDG_RUNTIME_DIR").ok().as_deref())
-}
-
-/// Pure decision split out of `socket_path` so the fallback-refusal policy is
-/// unit-testable without mutating the process environment. Mirrors the identical
-/// helper in bin.rs.
-fn socket_path_from(xdg_runtime_dir: Option<&str>) -> Result<PathBuf, String> {
-    match xdg_runtime_dir {
-        Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir).join(SOCKET_FILENAME)),
-        _ => Err(
-            "XDG_RUNTIME_DIR is unset or empty; refusing to create a world-accessible \
-             control socket in /tmp. Set XDG_RUNTIME_DIR to a private per-user runtime \
-             directory (e.g. /run/user/$(id -u)) and retry."
-                .to_string(),
-        ),
-    }
-}
+// Terminal-escape sanitiser for untrusted text we echo back to an operator's
+// terminal, shared with the CLI binary through the same `#[path]` mechanism.
+#[path = "sanitize.rs"]
+mod sanitize;
+use sanitize::sanitize_for_terminal;
 
 /// Commands the CLI can send to the running emulator.
 #[derive(Debug)]
@@ -104,6 +85,44 @@ pub struct EmulatorState {
     pub disc: DiscState,
 }
 
+/// Make `path` free to bind, WITHOUT stealing a socket somebody is using.
+///
+/// The unconditional `let _ = std::fs::remove_file(&path)` this replaces was how
+/// two concurrent `bdemu run` instances (two emulated drives, or two CI-matrix
+/// jobs sharing a runner) silently took each other's control socket: the second
+/// emulator unlinked the first's inode, the first went on accepting on a socket
+/// no path pointed at any more, and every later `bdemu load` / `eject` / `status`
+/// reached the SECOND emulator and answered OK. Nothing failed, so nothing was
+/// noticed — the disc the operator thought they loaded was loaded into the other
+/// drive.
+///
+/// A socket with a live listener answers `connect(2)`; one left behind by a
+/// crashed emulator answers ECONNREFUSED. So: refuse loudly on a live peer (and
+/// point the operator at `BDEMU_INSTANCE` for running a second emulator), and
+/// only reclaim a socket that is provably dead. This is detect-and-refuse, not a
+/// lock: a competing instance could still bind between our probe and our bind,
+/// but that residual race fails loudly at `bind` (EADDRINUSE) instead of stealing
+/// silently, and the collision it does close — an emulator already running — is
+/// the one that actually happens.
+fn reclaim_socket_path(path: &std::path::Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(path).is_err() {
+        // Nothing there: the ordinary first-instance case.
+        return Ok(());
+    }
+    if UnixStream::connect(path).is_ok() {
+        return Err(format!(
+            "{} is already in use by a running emulator; refusing to steal it. \
+             Set {}=<id> to give this instance its own socket.",
+            path.display(),
+            socket_name::INSTANCE_ENV
+        ));
+    }
+    // Nothing is listening: a stale socket (or a leftover non-socket file).
+    // Reclaim it, but surface an unlink failure rather than letting it resurface
+    // as a confusing EADDRINUSE from bind.
+    std::fs::remove_file(path).map_err(|e| format!("cannot remove stale {}: {}", path.display(), e))
+}
+
 /// Start the control socket listener in a background thread.
 pub fn start_listener(
     profile: Arc<Mutex<crate::profile::LoadedProfile>>,
@@ -117,8 +136,10 @@ pub fn start_listener(
         }
     };
 
-    // Clean up stale socket
-    let _ = std::fs::remove_file(&path);
+    if let Err(e) = reclaim_socket_path(&path) {
+        eprintln!("bdemu: control socket disabled: {}", e);
+        return;
+    }
 
     // Tighten umask to 0o177 around bind so the socket is created owner-only
     // (0600) from the start. set_permissions after bind would still leave a
@@ -372,13 +393,14 @@ fn cmd_load(
 /// Flat images have an empty map and fall back to length/2048.
 fn disc_sector_count(d: &crate::profile::DiscProfile) -> usize {
     if d.sector_map.is_empty() {
-        if !d.sectors.len().is_multiple_of(2048) {
+        if !d.sectors.len().is_multiple_of(SECTOR_SIZE) {
             eprintln!(
-                "bdemu: sectors.bin length {} is not a multiple of 2048 (truncated capture?)",
-                d.sectors.len()
+                "bdemu: sectors.bin length {} is not a multiple of {} (truncated capture?)",
+                d.sectors.len(),
+                SECTOR_SIZE
             );
         }
-        d.sectors.len() / 2048
+        d.sectors.len() / SECTOR_SIZE
     } else {
         d.sector_map.iter().map(|(_, c, _)| *c as usize).sum()
     }
@@ -413,7 +435,20 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
                 } else {
                     ""
                 };
-                lines.push(format!("  {}{} (sectors={})", name, marker, has_sectors));
+                // The directory name is untrusted: profiles arrive from strangers
+                // through the documented GitHub-issue workflow, and this line is
+                // written to the control socket for the CLI to print verbatim to a
+                // terminal. An ESC in a disc directory name would otherwise repaint
+                // or erase the operator's screen, and an embedded newline would
+                // forge extra response lines in a newline-delimited protocol —
+                // including a fake leading "OK". Compare on the RAW name (that is
+                // what `load` addresses) but display the sanitised form.
+                lines.push(format!(
+                    "  {}{} (sectors={})",
+                    sanitize_for_terminal(&name),
+                    marker,
+                    has_sectors
+                ));
             }
         }
     }
@@ -509,17 +544,159 @@ mod tests {
             "status should report the empty disc state, got: {resp:?}"
         );
     }
+    /// A per-test scratch directory under the crate's `target/` (never /tmp, per
+    /// the project no-/tmp scratch rule) — short enough that a Unix socket path
+    /// inside it stays within `sun_path`.
+    fn test_scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scratch")
+            .join(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test scratch dir");
+        dir
+    }
 
+    /// Catches the mutation that restores the unconditional
+    /// `let _ = std::fs::remove_file(&path)` before bind: a second emulator would
+    /// unlink a LIVE socket, leaving the first emulator accepting on an inode no
+    /// path reaches while every later `bdemu load`/`eject` silently addressed the
+    /// second one.
     #[test]
-    fn socket_path_refuses_insecure_tmp_fallback() {
-        // A private per-user runtime dir is accepted.
-        let p = socket_path_from(Some("/run/user/1000")).expect("must accept a runtime dir");
-        assert_eq!(p, PathBuf::from("/run/user/1000/bdemu.sock"));
+    fn a_live_control_socket_is_never_stolen() {
+        let dir = test_scratch_dir("ctl_live");
+        let path = dir.join("bdemu.sock");
 
-        // Unset/empty XDG_RUNTIME_DIR is REFUSED rather than binding a
-        // world-accessible /tmp/bdemu.sock.
-        let err = socket_path_from(None).expect_err("None must be refused");
-        assert!(err.contains("XDG_RUNTIME_DIR"), "got: {err}");
-        assert!(socket_path_from(Some("")).is_err(), "empty must be refused");
+        // A live listener, exactly as a running emulator would leave one.
+        let _live = UnixListener::bind(&path).expect("bind fixture listener");
+        let err = reclaim_socket_path(&path).expect_err("a live socket must not be reclaimed");
+        assert!(err.contains("already in use"), "got: {err}");
+        assert!(
+            err.contains(socket_name::INSTANCE_ENV),
+            "the error must tell the operator how to run a second instance: {err}"
+        );
+        // …and the live socket is still there.
+        assert!(path.exists(), "the live socket must not have been unlinked");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half: a socket left behind by a crashed emulator has no
+    /// listener, so it must still be reclaimable — otherwise a single crash would
+    /// wedge the control socket until someone deleted the file by hand.
+    #[test]
+    fn a_stale_control_socket_is_reclaimed() {
+        let dir = test_scratch_dir("ctl_stale");
+        let path = dir.join("bdemu.sock");
+
+        // Bind then drop: the socket file survives, but nothing is listening.
+        {
+            let _dead = UnixListener::bind(&path).expect("bind fixture listener");
+        }
+        assert!(path.exists(), "dropping a listener leaves the socket file");
+
+        reclaim_socket_path(&path).expect("a stale socket must be reclaimable");
+        assert!(!path.exists(), "the stale socket must have been removed");
+
+        // A path with nothing at it is the ordinary first-instance case.
+        reclaim_socket_path(&path).expect("an absent path is fine");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End-to-end coverage of the two mutating control verbs over a real socket
+    /// pair, which nothing exercised before: `load` must resolve a disc under the
+    /// profile's `discs/` directory, swap it into the live profile, report the
+    /// sector count and arm the media-change flag the SCSI layer reports as a UNIT
+    /// ATTENTION; `eject` must clear it again. Catches a `load` that answers OK
+    /// without actually swapping the disc in (the state and the profile going out
+    /// of sync is exactly the drift `DiscState` exists to prevent).
+    #[test]
+    fn load_then_eject_round_trip() {
+        // cmd_load / cmd_eject set the process-global media-change flag the SCSI
+        // layer reports as a UNIT ATTENTION, so serialize against the SCSI tests
+        // that assert on it (see scsi::TEST_GUARD).
+        let _g = crate::scsi::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = test_scratch_dir("ctl_load_eject");
+        let disc_dir = dir.join("discs").join("sample");
+        std::fs::create_dir_all(&disc_dir).unwrap();
+        // Two captured sectors in the legacy flat format.
+        std::fs::write(disc_dir.join("sectors.bin"), vec![0xA5u8; 2 * SECTOR_SIZE]).unwrap();
+
+        let (profile, state) = fixture_state();
+        lock_recover(&state).profile_dir = dir.clone();
+
+        // load
+        let resp = cmd_load(&profile, &state, "sample");
+        assert_eq!(
+            resp.lines,
+            vec!["OK loaded 'sample' (2 sectors)".to_string()],
+            "load must report the disc it actually read"
+        );
+        assert!(
+            lock_recover(&profile).disc.is_some(),
+            "the disc must be swapped into the live profile, not just the state"
+        );
+        assert_eq!(lock_recover(&state).disc.name(), Some("sample"));
+        // status reflects it.
+        assert!(
+            cmd_status(&state)
+                .lines
+                .iter()
+                .any(|l| l == "disc: loaded (sample)"),
+            "status must show the loaded disc"
+        );
+
+        // A name that does not resolve under discs/ is refused, and leaves the
+        // loaded disc alone.
+        let bad = cmd_load(&profile, &state, "../escape");
+        assert_eq!(bad.lines, vec!["ERR invalid disc name".to_string()]);
+        assert!(
+            lock_recover(&profile).disc.is_some(),
+            "a rejected load must not eject"
+        );
+
+        // eject
+        let resp = cmd_eject(&profile, &state);
+        assert_eq!(resp.lines, vec!["OK ejected".to_string()]);
+        assert!(
+            lock_recover(&profile).disc.is_none(),
+            "eject must clear the disc from the profile"
+        );
+        assert!(matches!(lock_recover(&state).disc, DiscState::Empty));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `list-discs` writes directory names into a newline-delimited protocol that
+    /// the CLI prints straight to a terminal, and profiles come from strangers.
+    /// Catches the mutation that drops the sanitiser: an ESC in a disc directory
+    /// name would repaint the operator's screen, and an embedded newline would
+    /// forge an extra response line.
+    #[test]
+    fn list_discs_sanitises_hostile_directory_names() {
+        let dir = test_scratch_dir("ctl_list_discs");
+        // A directory name carrying an escape sequence and a forged response line.
+        let hostile = "evil\u{1b}[2J\nOK forged";
+        std::fs::create_dir_all(dir.join("discs").join(hostile)).unwrap();
+
+        let (_profile, state) = fixture_state();
+        lock_recover(&state).profile_dir = dir.clone();
+
+        let resp = cmd_list_discs(&state);
+        let body = resp.lines.join("\n");
+        assert!(
+            !body.contains('\u{1b}'),
+            "ESC must not reach the wire: {body:?}"
+        );
+        assert!(
+            resp.lines.len() == 2,
+            "a name with a newline must not forge extra lines: {:?}",
+            resp.lines
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

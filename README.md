@@ -16,7 +16,7 @@ Or build from source: `cargo build --release`
 ## Quick Start
 
 ```bash
-# Capture a disc (auto-names, auto-ejects)
+# Capture a disc (auto-names; pass --eject to eject the tray afterwards)
 bdemu capture-disc /dev/sr0 ./testbed/disc
 
 # Emulate a drive and scan the captured disc
@@ -30,7 +30,7 @@ bdemu 1.6.4
 
 Commands:
   run --profile <dir> [--disc <name>] -- <cmd>   Emulate drive, run command
-  capture-disc <device> <output_dir>             Smart capture from hardware
+  capture-disc <device> <output_dir> [--eject]   Smart capture from hardware
   validate <profile_dir>                         Check profile completeness
 
 Control (while emulator is running):
@@ -40,7 +40,7 @@ Control (while emulator is running):
   list-discs                                     List available discs
 
 Examples:
-  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names, ejects
+  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names (add --eject to eject)
   bdemu run -p profiles/bu40n -d sample -- freemkv info disc://
   bdemu validate profiles/bu40n/
 ```
@@ -51,7 +51,9 @@ Examples:
 
 After capture, the output directory is automatically renamed to the disc's volume ID (e.g. `disc` becomes `sample_film`). If the name already exists, a number is appended (`sample_film_2`).
 
-The disc tray ejects automatically when capture completes.
+The tray is **not** ejected by default — pass `--eject` to `capture-disc` if you
+want the disc ejected once the capture finishes. Eject is irreversible on
+slot-loading drives (you have to physically reload the disc), so it is opt-in.
 
 ## Creating Profiles
 
@@ -90,6 +92,7 @@ profiles/my-drive/
 | `BDEMU_PROFILE` | Path to drive profile directory |
 | `BDEMU_DISC` | Disc subdirectory name |
 | `BDEMU_QUIET` | Suppress SCSI command logging |
+| `BDEMU_INSTANCE` | Instance id for the control socket (`$XDG_RUNTIME_DIR/bdemu-<id>.sock`). Unset uses `bdemu.sock`. Set it — on both the `bdemu run` side and the `status`/`load`/`eject` side — when running two emulators at once, otherwise the second refuses to start rather than stealing the first's socket. Ids may contain ASCII letters, digits, `-` and `_`. |
 
 ## License
 
