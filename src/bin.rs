@@ -8,10 +8,18 @@
 mod capture;
 
 // The library is a cdylib and cannot be linked as an rlib, so the binary cannot
-// import from it. Pull the shared socket filename in directly via #[path] so it
-// matches the emulator's bind side (control.rs uses the same file).
+// import from it. Pull the shared control-socket path policy in directly via
+// #[path] so the connect side here matches the emulator's bind side (control.rs
+// includes the same file).
 #[path = "socket_name.rs"]
 mod socket_name;
+use socket_name::socket_path;
+
+// Same mechanism for the terminal-escape sanitiser applied to profile-derived
+// text (see sanitize.rs for why profile strings are untrusted).
+#[path = "sanitize.rs"]
+mod sanitize;
+use sanitize::sanitize_for_terminal;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -248,6 +256,63 @@ fn usage() {
     println!("https://github.com/freemkv/bdemu");
 }
 
+/// State of a per-disc blob (`toc.bin`, `sectors.bin`) as `validate` reports it.
+///
+/// `validate` used to answer this question with a bare `Path::exists()` and print
+/// `sectors=true`. A `sectors.bin` left behind by an interrupted capture — the
+/// file created, the process killed before a byte was written — exists, so the
+/// profile validated clean and `bdemu validate` exited 0 on a fixture the
+/// emulator cannot serve a single sector from. Size is the thing that matters, so
+/// report it, and treat a zero-byte blob as a failure rather than a success.
+///
+/// A blob that is genuinely ABSENT stays non-fatal: a metadata-only disc fixture
+/// (TOC/capacity but no captured sectors) is a legitimate thing to have, and the
+/// emulator now answers reads against it with CHECK CONDITION rather than
+/// pretending zeros are content.
+#[derive(Debug, PartialEq, Eq)]
+enum BlobState {
+    Missing,
+    Empty,
+    Present(u64),
+    /// Stat failed for a reason other than absence (permissions, I/O error): we
+    /// cannot vouch for the blob, so it is not a pass.
+    Unreadable,
+}
+
+impl BlobState {
+    fn is_broken(&self) -> bool {
+        matches!(self, BlobState::Empty | BlobState::Unreadable)
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            BlobState::Missing => "missing".to_string(),
+            BlobState::Empty => "EMPTY (0 bytes — interrupted capture?)".to_string(),
+            BlobState::Present(n) => format!("{} bytes", n),
+            BlobState::Unreadable => "UNREADABLE".to_string(),
+        }
+    }
+}
+
+/// Classify a blob from its `fs::metadata` result. Split out from the filesystem
+/// access so the policy is unit-testable.
+fn classify_blob(meta: Result<u64, std::io::ErrorKind>) -> BlobState {
+    match meta {
+        Ok(0) => BlobState::Empty,
+        Ok(n) => BlobState::Present(n),
+        Err(std::io::ErrorKind::NotFound) => BlobState::Missing,
+        Err(_) => BlobState::Unreadable,
+    }
+}
+
+fn blob_state(path: &std::path::Path) -> BlobState {
+    classify_blob(
+        std::fs::metadata(path)
+            .map(|m| m.len())
+            .map_err(|e| e.kind()),
+    )
+}
+
 fn validate_profile(dir: &str) {
     use std::path::Path;
     let p = Path::new(dir);
@@ -274,13 +339,21 @@ fn validate_profile(dir: &str) {
         // metadata-then-read split previously raced: a truncation between the
         // size check and the read left an empty Vec, and &data[8..16] panicked.
         Ok(data) if data.len() == 96 => {
+            // INQUIRY strings come out of a profile a stranger produced (SCHEMA.md
+            // documents sharing profiles through GitHub issues, and
+            // profile-from-issue.yml turns an issue body into one of these
+            // directories). `.trim()` removes spaces, not ESC: a product string of
+            // "BDR\x1b[2J" would clear the operator's terminal, and CSI/OSC
+            // sequences can scroll the MISSING lines of this very report out of
+            // sight. Sanitise before printing — the same `char::is_control` class
+            // the `load` handler above refuses on the input side.
             let vendor = std::str::from_utf8(&data[8..16]).unwrap_or("?").trim();
             let product = std::str::from_utf8(&data[16..32]).unwrap_or("?").trim();
             println!(
                 "  ✓ inquiry.bin ({} bytes) — {} {}",
                 data.len(),
-                vendor,
-                product
+                sanitize_for_terminal(vendor),
+                sanitize_for_terminal(product)
             );
         }
         Ok(data) => {
@@ -314,13 +387,16 @@ fn validate_profile(dir: &str) {
                 // silently dropping the date/serial annotation. Surface it.
                 match std::fs::read(&fp) {
                     Ok(data) if data.len() > 4 => {
+                        // Same untrusted-profile reasoning as inquiry.bin above:
+                        // the firmware date and serial are raw bytes from a
+                        // third-party profile, printed straight to a terminal.
                         if *code == 0x010C {
                             let date =
                                 std::str::from_utf8(&data[4..16.min(data.len())]).unwrap_or("?");
-                            extra = format!(" — date: {}", date);
+                            extra = format!(" — date: {}", sanitize_for_terminal(date));
                         } else {
                             let serial = std::str::from_utf8(&data[4..]).unwrap_or("?").trim();
-                            extra = format!(" — serial: {}", serial);
+                            extra = format!(" — serial: {}", sanitize_for_terminal(serial));
                         }
                     }
                     Ok(_) => {}
@@ -382,13 +458,30 @@ fn validate_profile(dir: &str) {
             Ok(entries) => {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let has_sectors = entry.path().join("sectors.bin").exists();
-                        let has_toc = entry.path().join("toc.bin").exists();
+                        // Disc directory names come from the profile too, so they
+                        // are sanitised like every other profile-derived string.
+                        let name = sanitize_for_terminal(&entry.file_name().to_string_lossy());
+                        let toc = blob_state(&entry.path().join("toc.bin"));
+                        let sectors = blob_state(&entry.path().join("sectors.bin"));
                         println!(
-                            "  ✓ disc: {} (toc={}, sectors={})",
-                            name, has_toc, has_sectors
+                            "  {} disc: {} (toc={}, sectors={})",
+                            if toc.is_broken() || sectors.is_broken() {
+                                "✗"
+                            } else {
+                                "✓"
+                            },
+                            name,
+                            toc.describe(),
+                            sectors.describe()
                         );
+                        // A zero-byte blob is an interrupted capture, not an
+                        // absent one: the file exists, so the old `.exists()`
+                        // check printed `sectors=true` and `validate` exited 0
+                        // while the emulator would serve nothing at all from it.
+                        // Fail the profile instead.
+                        if toc.is_broken() || sectors.is_broken() {
+                            ok = false;
+                        }
                     }
                 }
             }
@@ -410,35 +503,6 @@ fn validate_profile(dir: &str) {
         // Signal failure so a CI step gating on a complete profile fails on a
         // broken one (the warnings-only OK path still exits 0).
         std::process::exit(1);
-    }
-}
-
-/// Path to the control socket: the per-user runtime dir (mode 0700 on Linux) so
-/// the socket is never world-accessible. The control socket accepts load/eject/
-/// status commands, so a world-writable `/tmp/bdemu.sock` would let any local
-/// user drive the emulator; we therefore REFUSE the insecure /tmp fallback and
-/// return an error if $XDG_RUNTIME_DIR is unset/empty.
-///
-/// This MUST match the path the LD_PRELOAD library binds in `control.rs` (the
-/// cdylib cannot be linked as an rlib, so the logic is duplicated rather than
-/// shared).
-fn socket_path() -> Result<std::path::PathBuf, String> {
-    socket_path_from(std::env::var("XDG_RUNTIME_DIR").ok().as_deref())
-}
-
-/// Pure decision split out of `socket_path` so the fallback-refusal policy is
-/// unit-testable without mutating the process environment.
-fn socket_path_from(xdg_runtime_dir: Option<&str>) -> Result<std::path::PathBuf, String> {
-    match xdg_runtime_dir {
-        Some(dir) if !dir.is_empty() => {
-            Ok(std::path::PathBuf::from(dir).join(crate::socket_name::SOCKET_FILENAME))
-        }
-        _ => Err(
-            "XDG_RUNTIME_DIR is unset or empty; refusing to use a world-accessible \
-             control socket in /tmp. Set XDG_RUNTIME_DIR to a private per-user runtime \
-             directory (e.g. /run/user/$(id -u)) and retry."
-                .to_string(),
-        ),
     }
 }
 
@@ -542,22 +606,24 @@ fn response_is_error(lines: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{response_is_error, socket_path_from};
+    use super::response_is_error;
 
+    /// The CLI's connect side and the emulator's bind side must agree on the
+    /// socket path; both now derive it from the one shared `socket_name` module,
+    /// so this pins that the CLI really uses that policy (catches a mutation that
+    /// reintroduces a locally-computed path here).
     #[test]
-    fn socket_path_refuses_insecure_tmp_fallback() {
-        // With a private per-user runtime dir, the socket lives there.
-        let p = socket_path_from(Some("/run/user/1000")).expect("must accept a runtime dir");
+    fn cli_socket_path_uses_the_shared_policy() {
+        let p = crate::socket_name::socket_path_from(Some("/run/user/1000"), None)
+            .expect("must accept a runtime dir");
         assert_eq!(
             p,
             std::path::PathBuf::from("/run/user/1000").join(crate::socket_name::SOCKET_FILENAME)
         );
-
-        // Unset or empty XDG_RUNTIME_DIR must be REFUSED, not silently fall back
-        // to a world-accessible /tmp/bdemu.sock.
-        let err = socket_path_from(None).expect_err("None must be refused");
-        assert!(err.contains("XDG_RUNTIME_DIR"), "got: {err}");
-        assert!(socket_path_from(Some("")).is_err(), "empty must be refused");
+        assert!(
+            crate::socket_name::socket_path_from(None, None).is_err(),
+            "unset XDG_RUNTIME_DIR must be refused, not silently /tmp"
+        );
     }
 
     #[test]
@@ -588,5 +654,42 @@ mod tests {
         assert!(response_is_error(&[]));
         // First line lacks the OK prefix.
         assert!(response_is_error(&["unexpected".to_string()]));
+    }
+    /// `validate` reported `sectors=true` from a bare `Path::exists()`, so a
+    /// zero-byte `sectors.bin` left by an interrupted capture validated clean and
+    /// exited 0 — a fixture the emulator cannot serve one sector from, blessed by
+    /// CI. Catches the mutation that goes back to existence-only checking: a
+    /// zero-length blob must be BROKEN (and so fail the profile), a non-empty one
+    /// must pass, an absent one stays a non-fatal "missing", and a blob we cannot
+    /// even stat is not a pass either.
+    #[test]
+    fn zero_byte_blob_is_a_failure_not_a_pass() {
+        use super::{BlobState, classify_blob};
+        use std::io::ErrorKind;
+
+        assert_eq!(classify_blob(Ok(0)), BlobState::Empty);
+        assert!(
+            classify_blob(Ok(0)).is_broken(),
+            "an interrupted capture must fail validate, not pass it"
+        );
+        assert!(classify_blob(Ok(0)).describe().contains("0 bytes"));
+
+        assert_eq!(classify_blob(Ok(204800)), BlobState::Present(204800));
+        assert!(!classify_blob(Ok(204800)).is_broken());
+        assert!(
+            classify_blob(Ok(204800)).describe().contains("204800"),
+            "the size must be reported, not a bare true/false"
+        );
+
+        // Absent is legitimate (a metadata-only disc fixture) and stays non-fatal.
+        assert_eq!(classify_blob(Err(ErrorKind::NotFound)), BlobState::Missing);
+        assert!(!classify_blob(Err(ErrorKind::NotFound)).is_broken());
+
+        // Anything else (permissions, I/O error) cannot be vouched for.
+        assert_eq!(
+            classify_blob(Err(ErrorKind::PermissionDenied)),
+            BlobState::Unreadable
+        );
+        assert!(classify_blob(Err(ErrorKind::PermissionDenied)).is_broken());
     }
 }

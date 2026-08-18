@@ -4,7 +4,7 @@
 // MMC-6 / SPC-4 compliant SCSI command handlers
 // Reference: MMC-6 (mmc6r02g.pdf), SPC-4, SBC-3
 
-use crate::profile::LoadedProfile;
+use crate::profile::{LoadedProfile, SECTOR_SIZE};
 use crate::sg::SgIoHdr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -35,15 +35,35 @@ fn call() -> u32 {
     CALL_NUM.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
 
-fn log(num: u32, msg: &str) {
-    // BDEMU_QUIET is read exactly once and cached. log() runs at least once per
-    // SCSI command — including READ(10)/READ(12) for every 2048-byte sector of a
-    // rip — and std::env::var acquires the process-wide environment lock on each
-    // call, which would serialize the hottest path in the emulator. The env is
-    // fixed for the process lifetime, so a one-shot OnceLock is correct.
+/// Whether SCSI command logging is suppressed.
+///
+/// BDEMU_QUIET is read exactly once and cached. The logger runs at least once per
+/// SCSI command — including READ(10)/READ(12) for every 2048-byte sector of a
+/// rip — and std::env::var acquires the process-wide environment lock on each
+/// call, which would serialize the hottest path in the emulator. The env is
+/// fixed for the process lifetime, so a one-shot OnceLock is correct.
+fn quiet() -> bool {
     static QUIET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*QUIET.get_or_init(|| std::env::var("BDEMU_QUIET").is_ok()) {
+    *QUIET.get_or_init(|| std::env::var("BDEMU_QUIET").is_ok())
+}
+
+fn log(num: u32, msg: &str) {
+    if !quiet() {
         eprintln!("  [{:3}] {}", num, msg);
+    }
+}
+
+/// Logging variant that builds its message only if it will actually be printed.
+///
+/// `log(n, &format!(...))` formats eagerly: the String is allocated and written
+/// even under BDEMU_QUIET, where it is then dropped unused. For the handful of
+/// commands a session issues once (INQUIRY, GET_CONFIGURATION, MODE SENSE, …)
+/// that is free. READ(10)/READ(12) is different — it is the emulator's hot path,
+/// issued once per transfer for the whole length of a rip — so its log lines take
+/// a closure and cost nothing when quiet.
+fn log_lazy(num: u32, msg: impl FnOnce() -> String) {
+    if !quiet() {
+        eprintln!("  [{:3}] {}", num, msg());
     }
 }
 
@@ -112,6 +132,15 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
 
     [0; 4]
 }
+
+/// Serializes every test that touches the emulator's process-global SCSI state
+/// (MEDIA_CHANGED, NEW_MEDIA_EVENT, LAST_SENSE). It lives OUTSIDE the test module
+/// because the control-socket tests need it too: `cmd_load` / `cmd_eject` call
+/// `set_media_changed(true)`, which a concurrently-running READ test would then
+/// observe as a UNIT ATTENTION instead of the sense it was asserting on. One
+/// shared guard is the only thing that actually serializes them.
+#[cfg(test)]
+pub static TEST_GUARD: Mutex<()> = Mutex::new(());
 
 fn save_sense(key: u8, asc: u8, ascq: u8) {
     if let Ok(mut sense) = LAST_SENSE.lock() {
@@ -372,7 +401,7 @@ fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     // Default: ~25GB BD-SL
     let mut resp = [0u8; 8];
     let lba: u32 = 12219391;
-    let blk: u32 = 2048;
+    let blk: u32 = SECTOR_SIZE as u32;
     resp[0..4].copy_from_slice(&lba.to_be_bytes());
     resp[4..8].copy_from_slice(&blk.to_be_bytes());
     hdr.write_response(&resp);
@@ -421,38 +450,62 @@ fn read_sectors(
         return;
     }
 
-    let sector_size = 2048usize;
     // `count` is an untrusted u32 straight from the CDB; READ(12) permits up to
-    // ~4 billion sectors, so `count * sector_size` is a multi-TB allocation
+    // ~4 billion sectors, so `count * SECTOR_SIZE` is a multi-TB allocation
     // that OOM-aborts the process. Clamp the allocation to the host's declared
     // transfer length — we can never usefully return more than that anyway.
     let total = (count as usize)
-        .saturating_mul(sector_size)
+        .saturating_mul(SECTOR_SIZE)
         .min(hdr.dxfer_len as usize);
     let mut data = vec![0u8; total];
     // Whole sectors the (clamped) buffer holds; every copy loop bounds to this
     // so the clamp can never be over-indexed.
-    let out_sectors = data.len() / sector_size;
+    let out_sectors = data.len() / SECTOR_SIZE;
+
+    // First LBA the fixture could not supply, if any.
+    //
+    // This is the difference between "the disc holds zeros here" and "bdemu has
+    // no idea what this sector holds", and it must NOT be answered the same way.
+    // All three branches below used to fall through to one `write_response`, so a
+    // missing/truncated/uncaptured sector was returned as 2048 zero bytes at GOOD
+    // status with a log line byte-identical to a real hit: an absent
+    // `discs/<n>/sectors.bin`, or a capture whose map does not cover the LBA the
+    // host asked for, looked exactly like genuine disc content. That is this
+    // project's worst defect class — a failure that presents as success — and it
+    // is how ~9 MB of ciphertext once shipped inside a movie at rc=0.
+    //
+    // The BDSM format already draws the line for us: the range table enumerates
+    // precisely which LBAs were captured, so a sector INSIDE a range is
+    // authoritative data (zeros there are the disc's own zeros, and are served as
+    // GOOD), while a sector outside every range was never read off the medium.
+    // For the legacy flat dump the file itself is the extent of what was
+    // captured, so past-the-end is the same "never read" case.
+    // Records the FIRST uncaptured LBA only: the whole command fails either way
+    // (fixed-format sense has no way to report a partial success), and the first
+    // one is the useful diagnostic.
+    let mut missing: Option<u32> = None;
 
     if let Some(disc) = &profile.disc {
         if !disc.sector_map.is_empty() {
             // Sparse sector map: look up each requested sector
             for i in 0..out_sectors {
                 let target_lba = lba.wrapping_add(i as u32);
-                if let Some(offset) = lookup_sector(&disc.sector_map, target_lba) {
-                    // Guard the source slice: a crafted/truncated sector map
-                    // could point past the captured bytes.
-                    if offset + sector_size <= disc.sectors.len() {
-                        let dst = i * sector_size;
-                        data[dst..dst + sector_size]
-                            .copy_from_slice(&disc.sectors[offset..offset + sector_size]);
+                // Guard the source slice: a crafted/truncated sector map could
+                // point past the captured bytes. A range that claims a sector the
+                // file does not actually hold is a corrupt capture, not zeros —
+                // so it counts as missing too.
+                match lookup_sector(&disc.sector_map, target_lba) {
+                    Some(offset) if offset + SECTOR_SIZE <= disc.sectors.len() => {
+                        let dst = i * SECTOR_SIZE;
+                        data[dst..dst + SECTOR_SIZE]
+                            .copy_from_slice(&disc.sectors[offset..offset + SECTOR_SIZE]);
                     }
+                    _ => missing = missing.or(Some(target_lba)),
                 }
-                // Not in map / out of range = zeros (already initialized)
             }
         } else if !disc.sectors.is_empty() {
-            // Legacy flat dump (LBA = byte offset / 2048)
-            let max_sectors = disc.sectors.len() / sector_size;
+            // Legacy flat dump (LBA = byte offset / SECTOR_SIZE)
+            let max_sectors = disc.sectors.len() / SECTOR_SIZE;
             for i in 0..out_sectors {
                 // Widen to u64 before adding so `lba + i` cannot overflow on a
                 // 32-bit target (the sparse path above uses wrapping_add for the
@@ -460,28 +513,57 @@ fn read_sectors(
                 // usize for indexing in range.
                 let sector_lba = lba as u64 + i as u64;
                 if sector_lba < max_sectors as u64 {
-                    let src_start = sector_lba as usize * sector_size;
-                    data[i * sector_size..(i + 1) * sector_size]
-                        .copy_from_slice(&disc.sectors[src_start..src_start + sector_size]);
+                    let src_start = sector_lba as usize * SECTOR_SIZE;
+                    data[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE]
+                        .copy_from_slice(&disc.sectors[src_start..src_start + SECTOR_SIZE]);
+                } else {
+                    missing = missing.or(Some(sector_lba as u32));
                 }
             }
         } else if !disc.sector_data.is_empty() {
+            // Single-pattern fixture: every LBA is deliberately the same sector,
+            // so there is no such thing as an uncaptured sector here.
             for i in 0..out_sectors {
-                let src_len = std::cmp::min(disc.sector_data.len(), sector_size);
-                data[i * sector_size..i * sector_size + src_len]
+                let src_len = std::cmp::min(disc.sector_data.len(), SECTOR_SIZE);
+                data[i * SECTOR_SIZE..i * SECTOR_SIZE + src_len]
                     .copy_from_slice(&disc.sector_data[..src_len]);
             }
+        } else if out_sectors > 0 {
+            // A disc directory with no sector source at all: sectors.bin absent,
+            // unreadable (profile::read_bin logs why), or empty. Every requested
+            // sector is unknown.
+            missing = Some(lba);
         }
     }
 
+    if let Some(bad_lba) = missing {
+        // MEDIUM ERROR / UNRECOVERED READ ERROR. Deliberately not ILLEGAL REQUEST
+        // / LOGICAL BLOCK ADDRESS OUT OF RANGE (0x05/0x21): that tells the host
+        // its CDB was wrong, inviting it to blame the request rather than the
+        // fixture, and the LBA is usually perfectly valid on the real medium —
+        // it is bdemu that cannot recover the data. A host seeing 0x03/0x11
+        // behaves as it would against a real drive that failed to read a sector:
+        // it retries, degrades, or fails the rip. All of those beat accepting
+        // zeros as content. Uses the same set_check_condition + save_sense seam
+        // as every other error path in this file, so REQUEST SENSE reports it.
+        hdr.set_check_condition(0x03, 0x11, 0x00);
+        save_sense(0x03, 0x11, 0x00);
+        log_lazy(n, || {
+            format!(
+                "{} lba={} count={} -> UNRECOVERED READ ERROR (LBA {} not in capture)",
+                cmd, lba, count, bad_lba
+            )
+        });
+        return;
+    }
+
     hdr.write_response(&data);
-    log(
-        n,
-        &format!(
+    log_lazy(n, || {
+        format!(
             "{} lba={} count={} ({} bytes)",
             cmd, lba, count, hdr.dxfer_len
-        ),
-    );
+        )
+    });
 }
 
 /// Look up a sector in the sparse sector map using binary search.
@@ -500,7 +582,7 @@ fn lookup_sector(map: &[(u32, u32, usize)], lba: u32) -> Option<usize> {
         })
         .ok()?;
     let (start, _, byte_offset) = map[idx];
-    Some(byte_offset + (lba - start) as usize * 2048)
+    Some(byte_offset + (lba - start) as usize * SECTOR_SIZE)
 }
 
 // ============================================================================
@@ -522,9 +604,23 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
 // ============================================================================
 // 0x3C — READ BUFFER (SPC-4 §6.7)
 // ============================================================================
-// Mode 0: combined header + data
-// Mode 2: data — vendor-specific buffer data
-// Mode 3: descriptor — buffer capacity info
+// Implemented modes:
+//   Mode 2: data — vendor-specific buffer data, served from the profile
+//   Mode 3: descriptor — buffer capacity info
+//   Mode 6: vendor-specific (MTK register read)
+//   plus the unlock-handshake CDB shapes, recognised before the match below.
+//
+// Mode 0 (combined header + data) is NOT implemented, and the header comment
+// that claimed it was is corrected here rather than the mode being added: a
+// profile has no mode-0 payload to serve (SCHEMA.md's `read_buffer` map is
+// documented as "Only for mode 2 (vendor data)"), so implementing it would mean
+// inventing a descriptor + buffer bdemu never captured from the real drive — a
+// synthesised answer indistinguishable from a real one, which is precisely the
+// failure-that-looks-like-success class this project treats as its worst.
+// Every unimplemented mode therefore answers ILLEGAL REQUEST / INVALID FIELD IN
+// CDB, matching the mode-2-not-in-profile path below and the unhandled-opcode
+// arm in handle_scsi (which already chose ILLEGAL REQUEST over an empty GOOD for
+// the same reason).
 
 /// Allocation size for the READ_BUFFER unlock response: the host-requested
 /// `dxfer_len` clamped to 64 bytes. `dxfer_len` is an untrusted u32 from the
@@ -614,13 +710,19 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 ),
             );
         }
+        // Every other mode (including mode 0) is unimplemented. An empty GOOD
+        // response here told the host "this buffer is legitimately zero bytes
+        // long", which is a lie the host cannot detect; ILLEGAL REQUEST /
+        // INVALID FIELD IN CDB says what is actually true — bdemu does not
+        // implement this mode.
         _ => {
-            hdr.write_response(&[]);
+            hdr.set_check_condition(0x05, 0x24, 0x00);
+            save_sense(0x05, 0x24, 0x00);
             log(
                 n,
                 &format!(
-                    "READ_BUFFER mode={} buf=0x{:02X} ({} bytes)",
-                    mode, buf_id, hdr.dxfer_len
+                    "READ_BUFFER mode={} buf=0x{:02X} -> ILLEGAL REQUEST (mode not implemented)",
+                    mode, buf_id
                 ),
             );
         }
@@ -1054,11 +1156,6 @@ mod tests {
     use super::*;
     use crate::profile::LoadedProfile;
 
-    /// All tests in this module touch process-global state (MEDIA_CHANGED,
-    /// NEW_MEDIA_EVENT, LAST_SENSE) so they must run serially. One shared guard
-    /// across every test (not a per-test static) actually serializes them.
-    static TEST_GUARD: Mutex<()> = Mutex::new(());
-
     fn empty_profile() -> LoadedProfile {
         LoadedProfile {
             name: String::new(),
@@ -1399,5 +1496,258 @@ mod tests {
             freemkv_unlock::ld::UNLOCK_MARKER,
             "unlock marker must be written"
         );
+    }
+    // ------------------------------------------------------------------
+    // READ(10) / READ(12) — the miss-vs-hit distinction
+    // ------------------------------------------------------------------
+
+    /// Build a profile whose disc carries a BDSM sparse capture of `ranges`,
+    /// with every captured byte set to `fill`. Goes through the real
+    /// `parse_sector_file` so the map the READ handler sees is exactly the one a
+    /// captured `sectors.bin` would produce.
+    fn sparse_disc_profile(ranges: &[(u32, u32)], fill: u8) -> LoadedProfile {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"BDSM");
+        file.extend_from_slice(&1u32.to_le_bytes());
+        file.extend_from_slice(&(ranges.len() as u32).to_le_bytes());
+        for (start, count) in ranges {
+            file.extend_from_slice(&start.to_le_bytes());
+            file.extend_from_slice(&count.to_le_bytes());
+        }
+        let sectors: u32 = ranges.iter().map(|(_, c)| c).sum();
+        file.extend(std::iter::repeat_n(fill, sectors as usize * 2048));
+
+        let (sectors, sector_map) = crate::profile::parse_sector_file(file);
+        assert!(!sector_map.is_empty(), "fixture must parse as sparse BDSM");
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.sectors = sectors;
+            d.sector_map = sector_map;
+        }
+        p
+    }
+
+    /// A profile whose disc holds a legacy flat dump of `sector_count` sectors.
+    fn flat_disc_profile(sector_count: usize, fill: u8) -> LoadedProfile {
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.sectors = vec![fill; sector_count * 2048];
+        }
+        p
+    }
+
+    fn read10_cdb(lba: u32, count: u16) -> [u8; 10] {
+        let l = lba.to_be_bytes();
+        let c = count.to_be_bytes();
+        [0x28, 0, l[0], l[1], l[2], l[3], 0, c[0], c[1], 0]
+    }
+
+    fn read12_cdb(lba: u32, count: u32) -> [u8; 12] {
+        let l = lba.to_be_bytes();
+        let c = count.to_be_bytes();
+        [
+            0xA8, 0, l[0], l[1], l[2], l[3], c[0], c[1], c[2], c[3], 0, 0,
+        ]
+    }
+
+    /// Issue one READ through the real dispatcher and return (status, data, sense).
+    fn run_read(profile: &LoadedProfile, cdb: &[u8], sectors: usize) -> (u8, Vec<u8>, [u8; 32]) {
+        let mut data = vec![0xEEu8; sectors * 2048];
+        let mut sense = [0u8; 32];
+        let mut hdr = hdr_for(cdb, &mut data, &mut sense);
+        handle_scsi(&mut hdr, profile);
+        let status = hdr.status;
+        (status, data, sense)
+    }
+
+    /// THE defect: a READ that the fixture cannot satisfy must not come back as
+    /// GOOD with a zero-filled buffer. Catches the mutation that restores the
+    /// single fall-through `hdr.write_response(&data)` for all three branches —
+    /// with that mutation the host receives 2048 zero bytes at status 0x00 and a
+    /// log line identical to a real hit, so `discs/<n>/sectors.bin` being absent
+    /// (or unreadable) reads as genuine disc content and a broken acquisition
+    /// passes CI green.
+    #[test]
+    fn read10_with_no_captured_sectors_is_check_condition_not_zeros() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        // A disc directory with no sectors.bin at all: every sector source empty.
+        let profile = disc_profile();
+        let (status, data, sense) = run_read(&profile, &read10_cdb(0, 1), 1);
+
+        assert_eq!(
+            status, 0x02,
+            "a read with nothing captured must be CHECK CONDITION, not GOOD"
+        );
+        assert_eq!(sense[2], 0x03, "sense key must be MEDIUM ERROR");
+        assert_eq!(sense[12], 0x11, "ASC must be UNRECOVERED READ ERROR");
+        // The host buffer must not have been overwritten with a plausible-looking
+        // all-zero sector.
+        assert!(
+            data.iter().all(|&b| b == 0xEE),
+            "no data may be presented for a failed read"
+        );
+    }
+
+    /// The other half of the same distinction: a sector that IS inside a captured
+    /// BDSM range is authoritative, so it is served at GOOD — including when its
+    /// contents are genuinely zero. Catches an over-broad fix that failed any read
+    /// whose bytes happen to be zero (which would break every legitimately blank
+    /// region of a real disc).
+    #[test]
+    fn read10_captured_zero_sector_is_served_as_good() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        // Range [100, 102] captured, and the captured bytes are zeros.
+        let profile = sparse_disc_profile(&[(100, 3)], 0x00);
+        let (status, data, _) = run_read(&profile, &read10_cdb(101, 1), 1);
+
+        assert_eq!(status, 0x00, "a captured sector must be GOOD");
+        assert!(
+            data.iter().all(|&b| b == 0),
+            "captured zeros must be served verbatim"
+        );
+    }
+
+    /// A hit must still serve the captured bytes byte-for-byte. Catches a fix
+    /// that failed reads indiscriminately (the opposite over-correction).
+    #[test]
+    fn read10_hit_serves_captured_bytes() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(100, 3)], 0xA5);
+        let (status, data, _) = run_read(&profile, &read10_cdb(100, 2), 2);
+
+        assert_eq!(status, 0x00);
+        assert!(
+            data.iter().all(|&b| b == 0xA5),
+            "captured bytes must appear"
+        );
+    }
+
+    /// A sector OUTSIDE every captured range was never read off the medium, so it
+    /// must fail — even though the disc is loaded and other sectors are present.
+    /// This is the everyday case: a capture whose sparse map does not cover the
+    /// LBA freemkv asks for.
+    #[test]
+    fn read10_outside_the_captured_map_is_check_condition() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(100, 3)], 0xA5);
+        let (status, data, sense) = run_read(&profile, &read10_cdb(500, 1), 1);
+
+        assert_eq!(status, 0x02, "uncaptured LBA must be CHECK CONDITION");
+        assert_eq!(sense[2], 0x03);
+        assert_eq!(sense[12], 0x11);
+        assert!(data.iter().all(|&b| b == 0xEE), "no data for a failed read");
+    }
+
+    /// A multi-sector read that straddles the end of a captured range fails as a
+    /// whole: fixed-format sense cannot express "the first sector was fine", and
+    /// silently zero-filling the tail is exactly the defect.
+    #[test]
+    fn read10_partially_captured_span_fails() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(100, 2)], 0xA5);
+        // LBAs 100,101 are captured; 102 is not.
+        let (status, _, sense) = run_read(&profile, &read10_cdb(100, 3), 3);
+
+        assert_eq!(status, 0x02, "a partially-captured span must fail");
+        assert_eq!(sense[12], 0x11);
+    }
+
+    /// READ(12) shares the miss path with READ(10) — its CDB parses count from a
+    /// different field, so it gets its own coverage. Catches a fix applied to only
+    /// one of the two opcodes.
+    #[test]
+    fn read12_miss_and_hit_match_read10() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(7, 1)], 0x5A);
+
+        let (status, data, _) = run_read(&profile, &read12_cdb(7, 1), 1);
+        assert_eq!(status, 0x00, "READ(12) hit must be GOOD");
+        assert!(data.iter().all(|&b| b == 0x5A));
+
+        let (status, _, sense) = run_read(&profile, &read12_cdb(8, 1), 1);
+        assert_eq!(status, 0x02, "READ(12) miss must be CHECK CONDITION");
+        assert_eq!(sense[12], 0x11);
+    }
+
+    /// The legacy flat dump has the same two cases: inside the file is captured
+    /// data, past the end was never captured.
+    #[test]
+    fn read10_flat_dump_past_end_is_check_condition() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = flat_disc_profile(2, 0x11);
+
+        let (status, data, _) = run_read(&profile, &read10_cdb(1, 1), 1);
+        assert_eq!(status, 0x00, "an in-range flat sector must be GOOD");
+        assert!(data.iter().all(|&b| b == 0x11));
+
+        let (status, _, sense) = run_read(&profile, &read10_cdb(2, 1), 1);
+        assert_eq!(status, 0x02, "past the end of a flat dump must fail");
+        assert_eq!(sense[12], 0x11);
+    }
+
+    /// A failed read must also be reportable through REQUEST SENSE: the miss path
+    /// uses the same `save_sense` seam as every other error path, so a host that
+    /// polls sense separately sees the same MEDIUM ERROR. Catches a fix that set
+    /// the header status but forgot to latch the sense.
+    #[test]
+    fn read_miss_is_visible_to_request_sense() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(100, 1)], 0xA5);
+        let _ = run_read(&profile, &read10_cdb(999, 1), 1);
+
+        let rs_cdb = [0x03u8, 0, 0, 0, 18, 0];
+        let mut rs_data = vec![0u8; 18];
+        let mut rs_sense = [0u8; 32];
+        let mut rs = hdr_for(&rs_cdb, &mut rs_data, &mut rs_sense);
+        handle_scsi(&mut rs, &profile);
+        assert_eq!(rs_data[2], 0x03, "REQUEST SENSE must report MEDIUM ERROR");
+        assert_eq!(rs_data[12], 0x11, "…with UNRECOVERED READ ERROR");
+    }
+
+    /// An unimplemented READ BUFFER mode (mode 0 among them — the header comment
+    /// used to claim it was implemented) must be ILLEGAL REQUEST, not an empty
+    /// GOOD. Catches the mutation that restores `hdr.write_response(&[])` in the
+    /// catch-all arm, which told the host "this buffer really is zero bytes long".
+    #[test]
+    fn read_buffer_unimplemented_mode_is_illegal_request() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = empty_profile();
+        // Mode 0, with a buffer id the unlocker does not claim.
+        let mut cdb = [0x3Cu8, 0, 0x00, 0, 0, 0, 0, 0, 64, 0];
+        let mut buf_id = 0u8;
+        while freemkv_unlock::ld::is_unlock_read_buffer(0, buf_id) {
+            buf_id += 1;
+        }
+        cdb[2] = buf_id;
+
+        let mut data = vec![0u8; 64];
+        let mut sense = [0u8; 32];
+        let mut hdr = hdr_for(&cdb, &mut data, &mut sense);
+        handle_scsi(&mut hdr, &profile);
+
+        assert_eq!(
+            hdr.status, 0x02,
+            "unimplemented mode must be CHECK CONDITION"
+        );
+        assert_eq!(sense[2], 0x05, "sense key must be ILLEGAL REQUEST");
+        assert_eq!(sense[12], 0x24, "ASC must be INVALID FIELD IN CDB");
     }
 }
