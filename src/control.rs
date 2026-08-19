@@ -280,13 +280,23 @@ fn handle_client(
     };
 
     let mut writer = stream;
+    let mut wrote_all = true;
     for line in &response.lines {
         // Break on first write failure: once the peer has closed mid-response,
         // every remaining writeln! just fails (bounded only by the 5s write
         // timeout per line). Stop instead of churning through the rest.
         if writeln!(writer, "{}", line).is_err() {
+            wrote_all = false;
             break;
         }
+    }
+    // Terminate a fully-written response with the shared sentinel so the CLI can
+    // tell a complete reply from one cut short by a timeout/crash (see
+    // CONTROL_TERMINATOR). Only emit it when every response line was written: if a
+    // write already failed the reply is incomplete, so withholding the terminator
+    // is exactly what lets the CLI detect the truncation.
+    if wrote_all {
+        let _ = writeln!(writer, "{}", socket_name::CONTROL_TERMINATOR);
     }
 }
 
@@ -542,6 +552,58 @@ mod tests {
         assert!(
             resp.contains("disc: empty"),
             "status should report the empty disc state, got: {resp:?}"
+        );
+    }
+
+    /// Every control verb must reach its handler through parse_command +
+    /// handle_client over a real socket — previously only `status` was exercised
+    /// end-to-end, so a mutation to any other dispatch arm (routing `eject` to the
+    /// unknown-command path, say) would go unnoticed. eject/load touch the
+    /// process-global media-change flag, so serialize against the SCSI tests.
+    #[test]
+    fn dispatch_routes_every_verb_end_to_end() {
+        let _g = crate::scsi::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // status -> OK with disc state.
+        assert!(
+            run_one(b"status\n".to_vec()).contains("disc:"),
+            "status must route to cmd_status"
+        );
+        // eject -> OK ejected.
+        assert!(
+            run_one(b"eject\n".to_vec()).contains("OK ejected"),
+            "eject must route to cmd_eject"
+        );
+        // list-discs -> the fixture profile_dir has no discs directory.
+        assert!(
+            run_one(b"list-discs\n".to_vec()).contains("no discs directory"),
+            "list-discs must route to cmd_list_discs"
+        );
+        // load <bad> -> ERR (routes to cmd_load, which rejects the traversal name).
+        assert!(
+            run_one(b"load ../escape\n".to_vec()).contains("ERR"),
+            "load must route to cmd_load"
+        );
+        // An unrecognised verb is the explicit unknown-command error.
+        assert!(
+            run_one(b"bogus\n".to_vec()).contains("ERR unknown command"),
+            "an unknown verb must be reported, not silently accepted"
+        );
+    }
+
+    /// The wire response ends with the shared terminator sentinel so the CLI can
+    /// tell a complete reply from one cut short. Catches the mutation that stops
+    /// writing the terminator (which would make every CLI call look truncated).
+    #[test]
+    fn response_is_terminated_on_the_wire() {
+        let resp = run_one(b"status\n".to_vec());
+        let last = resp.lines().last();
+        assert_eq!(
+            last,
+            Some(socket_name::CONTROL_TERMINATOR),
+            "a complete response must end with the terminator line, got: {resp:?}"
         );
     }
     /// A per-test scratch directory under the crate's `target/` (never /tmp, per

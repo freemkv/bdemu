@@ -482,14 +482,32 @@ fn read_sectors(
     // captured, so past-the-end is the same "never read" case.
     // Records the FIRST uncaptured LBA only: the whole command fails either way
     // (fixed-format sense has no way to report a partial success), and the first
-    // one is the useful diagnostic.
-    let mut missing: Option<u32> = None;
+    // one is the useful diagnostic. Held as u64 so a request whose LBA runs past
+    // u32::MAX (the sparse wrap case below) is LOGGED with its true value rather
+    // than a truncated-to-u32 one — the diagnostic must not itself substitute a
+    // low LBA where a high one was meant.
+    let mut missing: Option<u64> = None;
 
     if let Some(disc) = &profile.disc {
         if !disc.sector_map.is_empty() {
             // Sparse sector map: look up each requested sector
             for i in 0..out_sectors {
-                let target_lba = lba.wrapping_add(i as u32);
+                // Compute the target LBA in u64. `lba + i` can exceed the u32 LBA
+                // space when a host issues a read near the top of it (READ(12)
+                // with lba=0xFFFFFFFE, count=4 asks for two LBAs past u32::MAX).
+                // The previous `lba.wrapping_add(i as u32)` wrapped those back to
+                // LBAs 0/1 — sectors almost every capture covers — and served
+                // that low data at GOOD as if it were the requested high sectors:
+                // wrong bytes presented as success, this repo's flagship defect
+                // class. An LBA past u32::MAX cannot exist in a u32-keyed sector
+                // map, so treat it as a miss (CHECK CONDITION), exactly as the
+                // flat-dump sibling below treats a past-the-end LBA.
+                let target_lba64 = lba as u64 + i as u64;
+                if target_lba64 > u32::MAX as u64 {
+                    missing = missing.or(Some(target_lba64));
+                    continue;
+                }
+                let target_lba = target_lba64 as u32;
                 // Guard the source slice: a crafted/truncated sector map could
                 // point past the captured bytes. A range that claims a sector the
                 // file does not actually hold is a corrupt capture, not zeros —
@@ -500,39 +518,50 @@ fn read_sectors(
                         data[dst..dst + SECTOR_SIZE]
                             .copy_from_slice(&disc.sectors[offset..offset + SECTOR_SIZE]);
                     }
-                    _ => missing = missing.or(Some(target_lba)),
+                    _ => missing = missing.or(Some(u64::from(target_lba))),
                 }
             }
         } else if !disc.sectors.is_empty() {
             // Legacy flat dump (LBA = byte offset / SECTOR_SIZE)
             let max_sectors = disc.sectors.len() / SECTOR_SIZE;
             for i in 0..out_sectors {
-                // Widen to u64 before adding so `lba + i` cannot overflow on a
-                // 32-bit target (the sparse path above uses wrapping_add for the
-                // same reason). The bounds check below keeps the cast back to
-                // usize for indexing in range.
+                // Widen to u64 before adding so `lba + i` cannot overflow (the
+                // sparse path above widens the same way, and treats an LBA past
+                // u32::MAX as a miss). The bounds check below keeps the cast back
+                // to usize for indexing in range.
                 let sector_lba = lba as u64 + i as u64;
                 if sector_lba < max_sectors as u64 {
                     let src_start = sector_lba as usize * SECTOR_SIZE;
                     data[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE]
                         .copy_from_slice(&disc.sectors[src_start..src_start + SECTOR_SIZE]);
                 } else {
-                    missing = missing.or(Some(sector_lba as u32));
+                    missing = missing.or(Some(sector_lba));
                 }
             }
         } else if !disc.sector_data.is_empty() {
-            // Single-pattern fixture: every LBA is deliberately the same sector,
-            // so there is no such thing as an uncaptured sector here.
-            for i in 0..out_sectors {
-                let src_len = std::cmp::min(disc.sector_data.len(), SECTOR_SIZE);
-                data[i * SECTOR_SIZE..i * SECTOR_SIZE + src_len]
-                    .copy_from_slice(&disc.sector_data[..src_len]);
+            // Single-pattern fixture: every LBA is deliberately the same 2048-byte
+            // sector. But a sector_data.bin SHORTER than one sector is a truncated
+            // capture, not a disc whose sector legitimately ends early — the old
+            // code copied the short bytes and left the rest of every sector as the
+            // zero-initialised buffer, returning 2048 real-plus-zero bytes at GOOD
+            // with a log line identical to a genuine hit. That is this repo's
+            // flagship "failure that looks like success" class, in the one read
+            // branch the round-1 fix did not touch. Refuse the short case as a
+            // miss (CHECK CONDITION, via the shared `missing` path below), and
+            // only serve the pattern when it is a whole sector.
+            if disc.sector_data.len() < SECTOR_SIZE {
+                missing = Some(u64::from(lba));
+            } else {
+                for i in 0..out_sectors {
+                    data[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE]
+                        .copy_from_slice(&disc.sector_data[..SECTOR_SIZE]);
+                }
             }
         } else if out_sectors > 0 {
             // A disc directory with no sector source at all: sectors.bin absent,
             // unreadable (profile::read_bin logs why), or empty. Every requested
             // sector is unknown.
-            missing = Some(lba);
+            missing = Some(u64::from(lba));
         }
     }
 
@@ -607,7 +636,8 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
 // Implemented modes:
 //   Mode 2: data — vendor-specific buffer data, served from the profile
 //   Mode 3: descriptor — buffer capacity info
-//   Mode 6: vendor-specific (MTK register read)
+//   Mode 6: vendor-specific (MTK register read) — a DELIBERATE empty-GOOD (see
+//           the mode-6 arm below); the drive returns status GOOD with no data.
 //   plus the unlock-handshake CDB shapes, recognised before the match below.
 //
 // Mode 0 (combined header + data) is NOT implemented, and the header comment
@@ -699,7 +729,20 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 ),
             );
         }
-        // Mode 6: Vendor-specific (MTK register read)
+        // Mode 6: Vendor-specific (MTK register read).
+        //
+        // This empty-GOOD is the pre-existing, DELIBERATE behavior for mode 6 (it
+        // predates round 2, which only documents and pins it — it is not a new
+        // decision), and is intentionally carved out of the "empty GOOD is a lie
+        // the host can't detect" policy the catch-all arm below applies to every
+        // OTHER unimplemented mode. The distinction: mode 6 is part of the
+        // vendor unlock/register-read flow the unlocker drives, where a bare GOOD
+        // is the expected answer, whereas the catch-all covers modes bdemu simply
+        // does not implement. The pin (read_buffer_mode6_is_deliberate_empty_good)
+        // exists so this carve-out is not mistaken for an oversight and silently
+        // "fixed" into an ILLEGAL REQUEST; if the empty-GOOD is ever shown to be
+        // wrong, changing it is a deliberate act that updates the test, not an
+        // accident.
         6 => {
             hdr.write_response(&[]);
             log(
@@ -1749,5 +1792,159 @@ mod tests {
         );
         assert_eq!(sense[2], 0x05, "sense key must be ILLEGAL REQUEST");
         assert_eq!(sense[12], 0x24, "ASC must be INVALID FIELD IN CDB");
+    }
+
+    /// MED (round-2): the sparse READ path computed `lba.wrapping_add(i)`, so a
+    /// READ(12) near the top of the u32 LBA space (lba=0xFFFFFFFE, count=4) wrapped
+    /// its out-of-range tail back to LBAs 0/1 and served THAT data at GOOD as if it
+    /// were the requested high sectors. Here the capture covers both the top of the
+    /// address space (so 0xFFFFFFFE/0xFFFFFFFF hit) and the bottom (LBAs 0/1, the
+    /// wrap targets); with the wrapping bug all four requested sectors resolve to a
+    /// hit and the read returns GOOD, whereas the true LBAs past u32::MAX have no
+    /// sector and must be a miss. Catches the mutation that restores wrapping_add.
+    #[test]
+    fn read12_lba_past_u32_max_is_a_miss_not_a_wrapped_hit() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = sparse_disc_profile(&[(0, 2), (0xFFFF_FFFE, 2)], 0xA5);
+        let (status, data, sense) = run_read(&profile, &read12_cdb(0xFFFF_FFFE, 4), 4);
+
+        assert_eq!(
+            status, 0x02,
+            "an LBA past u32::MAX must be a miss, not wrapped to a low captured sector"
+        );
+        assert_eq!(sense[2], 0x03, "sense key must be MEDIUM ERROR");
+        assert_eq!(sense[12], 0x11, "ASC must be UNRECOVERED READ ERROR");
+        assert!(
+            data.iter().all(|&b| b == 0xEE),
+            "no data may be served for a read whose tail wraps past u32::MAX"
+        );
+    }
+
+    /// MED (round-2): a `sector_data.bin` SHORTER than one 2048-byte sector is a
+    /// truncated capture. The single-pattern branch used to copy the short bytes
+    /// and leave the sector's tail zero-filled, returning it at GOOD with a log
+    /// identical to a genuine hit — the "failure that looks like success" class in
+    /// the one read branch the round-1 fix didn't touch. It must now be a miss.
+    #[test]
+    fn read10_short_sector_data_pattern_is_a_miss_not_zero_padded() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let mut profile = disc_profile();
+        if let Some(d) = profile.disc.as_mut() {
+            d.sector_data = vec![0xC3u8; 100]; // shorter than a full sector
+        }
+        let (status, data, sense) = run_read(&profile, &read10_cdb(0, 1), 1);
+
+        assert_eq!(
+            status, 0x02,
+            "a truncated single-pattern sector must fail, not serve real+zero bytes at GOOD"
+        );
+        assert_eq!(sense[12], 0x11, "ASC must be UNRECOVERED READ ERROR");
+        assert!(
+            data.iter().all(|&b| b == 0xEE),
+            "no partial-then-zero data may be served for the short pattern"
+        );
+    }
+
+    /// The other half: a `sector_data.bin` that IS a whole sector is a legitimate
+    /// single-pattern fixture and must still be served at GOOD, byte-for-byte, on
+    /// every LBA. Catches an over-correction that failed the pattern branch outright.
+    #[test]
+    fn read10_full_sector_data_pattern_is_served_as_good() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let mut profile = disc_profile();
+        if let Some(d) = profile.disc.as_mut() {
+            d.sector_data = vec![0x7Eu8; 2048];
+        }
+        let (status, data, _) = run_read(&profile, &read10_cdb(5, 1), 1);
+
+        assert_eq!(status, 0x00, "a whole-sector pattern must be GOOD");
+        assert!(
+            data.iter().all(|&b| b == 0x7E),
+            "the captured pattern must be served on every LBA"
+        );
+    }
+
+    /// MED (round-2), end-to-end: a hostile sectors.bin whose BDSM range table
+    /// OVERLAPS must serve NOTHING — a READ of LBA 0 must MISS (CHECK CONDITION),
+    /// never hand the host the discarded file's "BDSM"+header bytes as sector 0 at
+    /// GOOD. parse_sector_file discards the sectors for an overlapping BDSM; this
+    /// proves the READ path then answers a miss. Catches the mutation that kept the
+    /// file bytes (`(data, Vec::new())`) so the flat branch served the header.
+    #[test]
+    fn read10_overlapping_capture_serves_nothing_not_header() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        // An overlapping BDSM built exactly as a hostile sectors.bin would be.
+        let mut file = Vec::new();
+        file.extend_from_slice(b"BDSM");
+        file.extend_from_slice(&1u32.to_le_bytes()); // version
+        file.extend_from_slice(&2u32.to_le_bytes()); // 2 ranges
+        file.extend_from_slice(&100u32.to_le_bytes());
+        file.extend_from_slice(&5u32.to_le_bytes()); // LBA 100..105
+        file.extend_from_slice(&103u32.to_le_bytes());
+        file.extend_from_slice(&3u32.to_le_bytes()); // LBA 103..106 — overlap
+        file.extend_from_slice(&vec![0xEEu8; (5 + 3) * 2048]);
+
+        let (sectors, sector_map) = crate::profile::parse_sector_file(file);
+        let mut profile = disc_profile();
+        if let Some(d) = profile.disc.as_mut() {
+            d.sectors = sectors;
+            d.sector_map = sector_map;
+        }
+
+        let (status, data, sense) = run_read(&profile, &read10_cdb(0, 1), 1);
+        assert_eq!(
+            status, 0x02,
+            "an overlapping capture must miss, not serve the BDSM header at GOOD"
+        );
+        assert_eq!(sense[12], 0x11, "ASC must be UNRECOVERED READ ERROR");
+        assert!(
+            data.iter().all(|&b| b == 0xEE),
+            "no header bytes may reach the host for a discarded overlapping capture"
+        );
+    }
+
+    /// LOW (round-2): READ BUFFER mode 6 (MTK register read) is a DELIBERATE
+    /// empty-GOOD — the drive answers status GOOD with no payload. It must NOT be
+    /// mistaken for the "empty GOOD is a lie" antipattern and turned into an
+    /// ILLEGAL REQUEST (which would break the MTK handshake). Pins the carve-out so
+    /// a mutation that folds mode 6 into the unimplemented catch-all is caught.
+    #[test]
+    fn read_buffer_mode6_is_deliberate_empty_good() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        let profile = empty_profile();
+        // Mode 6 with a buffer id the unlocker does not claim (so it reaches the
+        // mode-6 arm, not the unlock fast-path).
+        let mut buf_id = 0u8;
+        while freemkv_unlock::ld::is_unlock_read_buffer(6, buf_id) {
+            buf_id += 1;
+        }
+        let cdb = [0x3Cu8, 6, buf_id, 0, 0, 0, 0, 0, 64, 0];
+        let mut data = vec![0xEEu8; 64];
+        let mut sense = [0u8; 32];
+        let mut hdr = hdr_for(&cdb, &mut data, &mut sense);
+        handle_scsi(&mut hdr, &profile);
+
+        assert_eq!(
+            hdr.status, 0x00,
+            "mode 6 is a deliberate empty-GOOD, not CHECK CONDITION"
+        );
+        assert_eq!(
+            hdr.resid, 64,
+            "an empty response leaves the whole buffer residual"
+        );
+        assert!(
+            data.iter().all(|&b| b == 0),
+            "an empty response zero-fills the host buffer"
+        );
     }
 }
