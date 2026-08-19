@@ -422,34 +422,54 @@ fn validate_profile(dir: &str) -> bool {
     for (file, code, name, annotated) in features {
         let fp = p.join(file);
         if fp.exists() {
-            let sz = std::fs::metadata(&fp).map(|m| m.len()).unwrap_or(0);
-            let mut extra = String::new();
-            if *annotated {
-                // The file passed exists() above; a read failure here (perms,
-                // truncation race) was previously swallowed by unwrap_or_default,
-                // silently dropping the date/serial annotation. Surface it.
-                match std::fs::read(&fp) {
-                    Ok(data) if data.len() > 4 => {
-                        // Same untrusted-profile reasoning as inquiry.bin above:
-                        // the firmware date and serial are raw bytes from a
-                        // third-party profile, printed straight to a terminal.
-                        if *code == 0x010C {
-                            let date =
-                                std::str::from_utf8(&data[4..16.min(data.len())]).unwrap_or("?");
-                            extra = format!(" — date: {}", sanitize_for_terminal(date));
-                        } else {
-                            let serial = std::str::from_utf8(&data[4..]).unwrap_or("?").trim();
-                            extra = format!(" — serial: {}", sanitize_for_terminal(serial));
+            // exists() alone is not "present and usable". A zero-byte blob (an
+            // interrupted capture write) or one whose metadata cannot be read is
+            // a BROKEN required feature, not a passing one — printing ✓ for it is
+            // the same fake-success the read_dir arm below was hardened against,
+            // and it diverges from the disc-blob check's Empty/Unreadable states.
+            // Fail it loudly instead.
+            match std::fs::metadata(&fp).map(|m| m.len()) {
+                Ok(0) => {
+                    println!("  ✗ {} (0x{:04X} {}) EMPTY", file, code, name);
+                    ok = false;
+                }
+                Err(e) => {
+                    println!("  ✗ {} (0x{:04X} {}) UNREADABLE: {}", file, code, name, e);
+                    ok = false;
+                }
+                Ok(sz) => {
+                    let mut extra = String::new();
+                    if *annotated {
+                        // The file passed exists() above; a read failure here (perms,
+                        // truncation race) was previously swallowed by unwrap_or_default,
+                        // silently dropping the date/serial annotation. Surface it.
+                        match std::fs::read(&fp) {
+                            Ok(data) if data.len() > 4 => {
+                                // Same untrusted-profile reasoning as inquiry.bin above:
+                                // the firmware date and serial are raw bytes from a
+                                // third-party profile, printed straight to a terminal.
+                                if *code == 0x010C {
+                                    let date = std::str::from_utf8(&data[4..16.min(data.len())])
+                                        .unwrap_or("?");
+                                    extra = format!(" — date: {}", sanitize_for_terminal(date));
+                                } else {
+                                    let serial =
+                                        std::str::from_utf8(&data[4..]).unwrap_or("?").trim();
+                                    extra = format!(" — serial: {}", sanitize_for_terminal(serial));
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("  warning: failed to read {}: {}", fp.display(), e)
+                            }
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("  warning: failed to read {}: {}", fp.display(), e),
+                    println!(
+                        "  ✓ {} (0x{:04X} {}, {} bytes){}",
+                        file, code, name, sz, extra
+                    );
                 }
             }
-            println!(
-                "  ✓ {} (0x{:04X} {}, {} bytes){}",
-                file, code, name, sz, extra
-            );
         } else {
             println!("  ✗ {} (0x{:04X} {}) MISSING", file, code, name);
             ok = false;
