@@ -12,6 +12,20 @@ use std::path::PathBuf;
 /// Basename of the control socket for the default (single-instance) case.
 pub const SOCKET_FILENAME: &str = "bdemu.sock";
 
+/// Terminator line the emulator writes after a complete control-socket response,
+/// and the CLI reads to confirm the reply was not cut short.
+///
+/// The control protocol is newline-delimited with no length prefix or terminator,
+/// so a reply cut off by a read timeout (or a crashed emulator) after `OK\n` was
+/// INDISTINGUISHABLE from a complete one: `bdemu list-discs` would print a partial
+/// list and exit 0. The emulator now writes this sentinel as the final line of
+/// every response and the CLI treats its ABSENCE as a truncation failure. It is a
+/// bare `.` on its own line, which no real response line can equal — status/OK/ERR
+/// lines carry a keyword prefix and every `list-discs` entry is indented with two
+/// leading spaces. Lives here, in the module both the bind side (control.rs) and
+/// the connect side (bin.rs) already share, so the two ends cannot disagree.
+pub const CONTROL_TERMINATOR: &str = ".";
+
 /// Environment variable naming this emulator instance.
 ///
 /// The socket used to be a fixed `$XDG_RUNTIME_DIR/bdemu.sock` with no per-

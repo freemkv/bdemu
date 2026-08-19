@@ -47,6 +47,19 @@ pub struct DiscProfile {
 /// If magic is NOT "BDSM", the file is a flat sector dump (legacy, LBA = offset/2048).
 pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
     if data.len() >= 12 && &data[0..4] == b"BDSM" {
+        // Every corrupt/hostile bail-out inside this block returns EMPTY sectors
+        // (`(Vec::new(), Vec::new())`), NOT `(data, Vec::new())`.
+        //
+        // The temptation is to "fall back to flat" by keeping `data` — but this
+        // file already matched the BDSM magic, so it is NOT a legacy flat dump:
+        // its first bytes are the "BDSM" magic + version + range table, not sector
+        // 0. Serving them as a flat dump would hand the host that header AS sector
+        // 0 content at GOOD status — the exact "wrong data presented as success"
+        // class this repo treats as its worst. Once a file claims to be BDSM, a
+        // parse failure means we cannot serve ANY sector from it: return empty so
+        // the READ handler answers every sector with CHECK CONDITION (an honest
+        // miss) instead. The genuine legacy-flat path is the `else` branch below,
+        // reached only when the magic is absent.
         let _version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         let num_ranges = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
 
@@ -57,14 +70,14 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
         // the 12-byte header), so clamp to that bound first.
         let max_ranges = data.len().saturating_sub(12) / 8;
         if num_ranges > max_ranges {
-            return (data, Vec::new()); // corrupt/hostile, treat as flat
+            return (Vec::new(), Vec::new()); // corrupt/hostile: serve nothing
         }
 
         // header_size = 12 + num_ranges*8; bounded by max_ranges above so this
         // cannot overflow, but verify against the buffer anyway.
         let header_size = match num_ranges.checked_mul(8).and_then(|h| h.checked_add(12)) {
             Some(h) if h <= data.len() => h,
-            _ => return (data, Vec::new()),
+            _ => return (Vec::new(), Vec::new()),
         };
 
         let mut map = Vec::with_capacity(num_ranges);
@@ -78,15 +91,16 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
 
             // The declared sector bytes for this range must actually exist in
             // `data`; otherwise lookup_sector + the READ handler would slice
-            // out of bounds and panic mid-session. Bail to the flat fallback
-            // on overflow or truncation rather than building a poisoned map.
+            // out of bounds and panic mid-session. Bail (serving nothing, per the
+            // block comment above) on overflow or truncation rather than building
+            // a poisoned map.
             let span = match (count as usize).checked_mul(SECTOR_SIZE) {
                 Some(s) => s,
-                None => return (data, Vec::new()),
+                None => return (Vec::new(), Vec::new()),
             };
             let next_offset = match data_offset.checked_add(span) {
                 Some(o) if o <= data.len() => o,
-                _ => return (data, Vec::new()),
+                _ => return (Vec::new(), Vec::new()),
             };
 
             map.push((start_lba, count, data_offset));
@@ -103,6 +117,31 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
         // (data corruption in the emulated disc). Matches the features-list sort
         // precedent in load_dir/load_json.
         map.sort_by_key(|&(start, _, _)| start);
+
+        // Reject OVERLAPPING ranges. lookup_sector (scsi.rs) binary-searches this
+        // map assuming the ranges are DISJOINT: it returns whichever range the
+        // search happens to land on. If two ranges cover the same LBA — an
+        // authoring bug, or a hostile profile crafted to do so — that resolution
+        // is arbitrary, so a given LBA could serve the WRONG range's bytes as
+        // authoritative GOOD (this repo's flagship "wrong data presented as
+        // success" class). Sorting alone does not prevent that. Walk the sorted
+        // map and, if any range starts before its predecessor ends, treat the
+        // whole file as corrupt and serve NOTHING (empty sectors + empty map, per
+        // the block comment above) so every read misses — the same bail-out the
+        // truncation/overflow guards use. A file reaching this point already
+        // parsed as a fully-structured BDSM (magic, version, in-bounds ranges), so
+        // it cannot be a coincidental flat dump; discarding its bytes is
+        // unambiguously right here. Ranges that merely TOUCH (prev end == next
+        // start) are disjoint and kept. `end` is computed in u64 so a range near
+        // u32::MAX cannot wrap and hide an overlap.
+        for w in map.windows(2) {
+            let (start_prev, count_prev, _) = w[0];
+            let (start_next, _, _) = w[1];
+            let end_prev = start_prev as u64 + count_prev as u64;
+            if (start_next as u64) < end_prev {
+                return (Vec::new(), Vec::new());
+            }
+        }
 
         (data, map)
     } else {
@@ -220,12 +259,15 @@ impl LoadedProfile {
             }
         }
 
-        // Load binary files
-        let inquiry = read_bin(&dir.join(&inquiry_file));
+        // Load binary files. Every blob filename below comes from the
+        // (untrusted) drive.toml, so it is resolved through read_blob, which
+        // refuses any name that would escape the profile directory — see
+        // read_blob for the full rationale.
+        let inquiry = read_blob(dir, &inquiry_file);
 
         let mut features: Vec<(u16, Vec<u8>)> = Vec::new();
         for (code, file) in &feature_files {
-            let data = read_bin(&dir.join(file));
+            let data = read_blob(dir, file);
             if !data.is_empty() {
                 features.push((*code, data));
             }
@@ -233,7 +275,7 @@ impl LoadedProfile {
         features.sort_by_key(|(c, _)| *c);
 
         let rpc_state = if !rpc_file.is_empty() {
-            read_bin(&dir.join(&rpc_file))
+            read_blob(dir, &rpc_file)
         } else {
             Vec::new()
         };
@@ -241,7 +283,7 @@ impl LoadedProfile {
         // Load read_buffer responses from TOML [read_buffer] section
         let mut read_bufs = Vec::new();
         for (id, file) in &rb_files {
-            let data = read_bin(&dir.join(file));
+            let data = read_blob(dir, file);
             if !data.is_empty() {
                 read_bufs.push((*id, data));
             }
@@ -283,7 +325,10 @@ impl LoadedProfile {
             rpc_state,
             read_bufs,
             mode_2a: if !mode_2a_file.is_empty() {
-                read_bin(&dir.join(&mode_2a_file))
+                // Also a drive.toml-supplied filename: contain it like every
+                // other profile blob. The `else` branch below is a fixed literal
+                // basename the loader chooses, so it needs no containment.
+                read_blob(dir, &mode_2a_file)
             } else {
                 read_bin(&dir.join("mode_2a.bin"))
             },
@@ -588,6 +633,54 @@ fn read_bin(path: &Path) -> Vec<u8> {
     }
 }
 
+/// True when `name` is a single plain path component safe to join onto the
+/// profile directory: non-empty, no path separator, no NUL, and not a `.`/`..`
+/// traversal component. Kept separate from the filesystem access so the policy
+/// is unit-testable. (An ordinary `.` *inside* a filename — `inquiry.bin` — is
+/// fine; only the whole-string `.`/`..` components are rejected.)
+fn is_contained_blob_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && name != "."
+        && name != ".."
+}
+
+/// Read a profile blob whose FILENAME came from the (untrusted) `drive.toml`,
+/// enforcing that it names a file directly inside the profile directory.
+///
+/// `drive.toml`'s `[files]`, `[features]` and `[read_buffer]` values are
+/// filenames chosen by whoever authored the profile — and profiles are
+/// THIRD-PARTY UNTRUSTED artifacts shared through the documented GitHub-issue
+/// workflow (SCHEMA.md / profile-from-issue.yml turns an issue body into one of
+/// these directories). The previous `read_bin(&dir.join(&name))` joined them raw,
+/// so a hostile profile could set `inquiry = "../../../../home/op/.ssh/id_rsa"`
+/// (or any absolute path) and bdemu would read that file and serve its bytes back
+/// as the emulated INQUIRY / feature / read-buffer response — an arbitrary
+/// local-file read surfaced over SCSI and into the logs. Round 1 added
+/// `safe_disc_dir` containment for the disc DIRECTORY name but left this
+/// blob-name sibling raw; this is the same containment for it.
+///
+/// A profile blob is always a plain filename beside `drive.toml` (SCHEMA.md shows
+/// flat `inquiry.bin`, `gc_0108.bin`, … and the loader itself writes fixed
+/// basenames such as `mode_2a.bin`), so a name that is empty, absolute, contains
+/// a separator/NUL, or is a `.`/`..` component is rejected. A rejected name is
+/// LOGGED (absence of a log is a bug) and mapped to the empty/"not present" blob
+/// every caller already understands — it is never opened.
+fn read_blob(dir: &Path, name: &str) -> Vec<u8> {
+    if is_contained_blob_name(name) {
+        read_bin(&dir.join(name))
+    } else {
+        eprintln!(
+            "bdemu: refusing profile blob path {:?}: it must be a plain filename \
+             inside the profile directory, not a path that escapes it",
+            name
+        );
+        Vec::new()
+    }
+}
+
 fn parse_hex(hex: &str) -> Vec<u8> {
     let clean: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     (0..clean.len())
@@ -643,8 +736,8 @@ fn parse_u16_opt(s: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoadedProfile, parse_sector_file, parse_toml_value, parse_u16_opt, read_bin_reported,
-        safe_disc_dir,
+        LoadedProfile, is_contained_blob_name, parse_sector_file, parse_toml_value, parse_u16_opt,
+        read_bin_reported, safe_disc_dir,
     };
 
     /// A per-test scratch directory under the crate's `target/` (never /tmp, per
@@ -704,39 +797,48 @@ mod tests {
     }
 
     #[test]
-    fn huge_num_ranges_does_not_allocate_or_panic() {
+    fn huge_num_ranges_serves_nothing() {
         // 0xFFFFFFFF ranges declared but no body: must not try to allocate
-        // billions of entries — falls back to flat (empty map).
+        // billions of entries. And because the file DID match the BDSM magic, the
+        // corrupt bail-out must serve NOTHING (empty sectors + empty map), not keep
+        // the header bytes as a flat dump — see the block comment in
+        // parse_sector_file.
         let data = bdsm_header(0xFFFF_FFFF);
-        let (_, map) = parse_sector_file(data);
-        assert!(map.is_empty(), "hostile num_ranges must fall back to flat");
-    }
-
-    #[test]
-    fn truncated_range_body_falls_back_to_flat() {
-        // One range claiming 1000 sectors (≈2 MB) but the file has no payload.
-        // Building the map unchecked would later slice out of bounds; instead
-        // we must drop to the flat fallback.
-        let mut data = bdsm_header(1);
-        data.extend_from_slice(&0u32.to_le_bytes()); // start_lba = 0
-        data.extend_from_slice(&1000u32.to_le_bytes()); // count = 1000
-        // No sector payload follows.
-        let (_, map) = parse_sector_file(data);
+        let (sectors, map) = parse_sector_file(data);
+        assert!(map.is_empty(), "hostile num_ranges must not build a map");
         assert!(
-            map.is_empty(),
-            "truncated payload must fall back to flat, not build an OOB map"
+            sectors.is_empty(),
+            "a corrupt BDSM must serve no sectors, not its header as flat sector 0"
         );
     }
 
     #[test]
-    fn count_multiply_overflow_falls_back_to_flat() {
+    fn truncated_range_body_serves_nothing() {
+        // One range claiming 1000 sectors (≈2 MB) but the file has no payload.
+        // Building the map unchecked would later slice out of bounds; instead the
+        // corrupt BDSM must serve nothing (not its header as a flat dump).
+        let mut data = bdsm_header(1);
+        data.extend_from_slice(&0u32.to_le_bytes()); // start_lba = 0
+        data.extend_from_slice(&1000u32.to_le_bytes()); // count = 1000
+        // No sector payload follows.
+        let (sectors, map) = parse_sector_file(data);
+        assert!(
+            map.is_empty(),
+            "truncated payload must not build an OOB map"
+        );
+        assert!(sectors.is_empty(), "a truncated BDSM must serve no sectors");
+    }
+
+    #[test]
+    fn count_multiply_overflow_serves_nothing() {
         // count near u32::MAX so count*2048 overflows usize math on 32-bit and
-        // certainly exceeds data.len(): must not panic, must fall back.
+        // certainly exceeds data.len(): must not panic, must serve nothing.
         let mut data = bdsm_header(1);
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&u32::MAX.to_le_bytes());
-        let (_, map) = parse_sector_file(data);
+        let (sectors, map) = parse_sector_file(data);
         assert!(map.is_empty());
+        assert!(sectors.is_empty());
     }
 
     #[test]
@@ -953,5 +1055,117 @@ mod tests {
         assert!(!p.has_disc(), "no BDEMU_DISC set -> no disc");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The lexical containment guard for profile blob filenames. Names that are a
+    /// plain filename (even with dots) are accepted; anything that could escape
+    /// the profile directory is rejected. Catches a mutation that drops any of the
+    /// separator / traversal-component checks.
+    #[test]
+    fn contained_blob_name_accepts_plain_files_rejects_escapes() {
+        assert!(is_contained_blob_name("inquiry.bin"));
+        assert!(is_contained_blob_name("gc_0108.bin"));
+        assert!(is_contained_blob_name("rb_f1.bin"));
+        assert!(is_contained_blob_name("file.with.dots.bin"));
+
+        assert!(!is_contained_blob_name(""), "empty");
+        assert!(!is_contained_blob_name("."), "current dir");
+        assert!(!is_contained_blob_name(".."), "parent dir");
+        assert!(!is_contained_blob_name("../secret.bin"), "relative escape");
+        assert!(!is_contained_blob_name("/etc/passwd"), "absolute path");
+        assert!(!is_contained_blob_name("a/b.bin"), "embedded slash");
+        assert!(!is_contained_blob_name("a\\b.bin"), "backslash");
+        assert!(!is_contained_blob_name("a\0b.bin"), "nul byte");
+    }
+
+    /// HIGH (round-2): a profile is an untrusted artifact from the GitHub-issue
+    /// workflow, so a hostile `drive.toml` that points a blob filename OUTSIDE the
+    /// profile directory (`inquiry = "../secret.bin"`) must NOT cause bdemu to read
+    /// that file and serve its bytes as the emulated INQUIRY / feature / rpc /
+    /// read-buffer response. Catches the mutation that restores the raw
+    /// `read_bin(&dir.join(&name))` on any of those blob-name paths (round-1
+    /// hardened only the disc-directory name via safe_disc_dir).
+    #[test]
+    fn blob_filenames_cannot_escape_the_profile_directory() {
+        let root = test_scratch_dir("blob_escape");
+        // A secret that lives OUTSIDE the profile directory.
+        std::fs::write(root.join("secret.bin"), b"TOPSECRETKEYMATERIAL").unwrap();
+
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("drive.toml"),
+            "[drive]\nproduct = \"X\"\n\
+             [files]\ninquiry = \"../secret.bin\"\nrpc_state = \"../secret.bin\"\n\
+             mode_2a = \"../secret.bin\"\n\
+             [features]\n0x0108 = \"../secret.bin\"\n\
+             [read_buffer]\n0xf1 = \"../secret.bin\"\n",
+        )
+        .unwrap();
+
+        let p = LoadedProfile::load(profile.to_str().unwrap()).expect("profile must still load");
+        assert!(
+            p.inquiry.is_empty(),
+            "a traversal inquiry path must be refused, not read as INQUIRY bytes"
+        );
+        assert!(p.rpc_state.is_empty(), "traversal rpc_state path refused");
+        assert!(p.mode_2a.is_empty(), "traversal mode_2a path refused");
+        assert!(
+            p.features.is_empty(),
+            "traversal feature path refused (not served as a feature descriptor)"
+        );
+        assert!(p.read_bufs.is_empty(), "traversal read_buffer path refused");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// MED (round-2): two ranges covering the same LBA make lookup_sector's binary
+    /// search resolve to an ARBITRARY one of them, so a hostile/corrupt profile
+    /// could serve the wrong sector's bytes as authoritative GOOD. An overlapping
+    /// map must be treated as corrupt and fall back to flat (empty map). Catches a
+    /// mutation that drops the overlap check and keeps the ambiguous map.
+    #[test]
+    fn overlapping_ranges_serve_nothing() {
+        let mut data = bdsm_header(2);
+        // Range 0: LBA 100..105.
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&5u32.to_le_bytes());
+        // Range 1: LBA 103..106 — overlaps range 0 at 103 and 104.
+        data.extend_from_slice(&103u32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&vec![0u8; (5 + 3) * 2048]);
+
+        let (sectors, map) = parse_sector_file(data);
+        assert!(
+            map.is_empty(),
+            "overlapping ranges must not build an ambiguous map"
+        );
+        // And the file bytes must be discarded, not kept as a flat dump: keeping
+        // them would serve the BDSM header as sector 0 at GOOD. The end-to-end
+        // proof that a READ then misses is
+        // scsi::tests::read10_overlapping_capture_serves_nothing_not_header.
+        assert!(
+            sectors.is_empty(),
+            "an overlapping BDSM must serve no sectors, not its header as flat data"
+        );
+    }
+
+    /// The other half of the overlap check: ranges that merely TOUCH
+    /// (prev end == next start) are disjoint and must be KEPT, or a legitimate
+    /// back-to-back capture would be wrongly discarded. Catches an over-strict
+    /// `<=` where the guard must use `<`.
+    #[test]
+    fn adjacent_non_overlapping_ranges_are_kept() {
+        let mut data = bdsm_header(2);
+        // Range 0: LBA 100..105.
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&5u32.to_le_bytes());
+        // Range 1: LBA 105..108 — touches range 0 but does not overlap.
+        data.extend_from_slice(&105u32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&vec![0u8; (5 + 3) * 2048]);
+
+        let (_, map) = parse_sector_file(data);
+        assert_eq!(map.len(), 2, "touching-but-disjoint ranges must be kept");
     }
 }

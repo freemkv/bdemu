@@ -34,33 +34,21 @@ fn main() {
     match args[1].as_str() {
         "run" => {
             // bdemu run --profile <dir> [--disc <name>] -- <command> [args...]
-            let mut profile: Option<String> = None;
-            let mut disc: Option<String> = None;
-            let mut cmd_start = 0;
-
-            let mut i = 2;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--profile" | "-p" => {
-                        i += 1;
-                        profile = Some(take_flag_value(&args, i, "--profile"));
-                    }
-                    "--disc" | "-d" => {
-                        i += 1;
-                        disc = Some(take_flag_value(&args, i, "--disc"));
-                    }
-                    "--" => {
-                        cmd_start = i + 1;
-                        break;
-                    }
-                    _ => {
-                        // First non-flag arg starts the command
-                        cmd_start = i;
-                        break;
-                    }
+            let RunArgs {
+                profile,
+                disc,
+                cmd_start,
+            } = match parse_run_args(&args) {
+                Ok(parsed) => parsed,
+                Err(flag) => {
+                    eprintln!("Error: missing {} value", flag);
+                    eprintln!();
+                    eprintln!(
+                        "Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]"
+                    );
+                    std::process::exit(1);
                 }
-                i += 1;
-            }
+            };
 
             let profile = profile.unwrap_or_else(|| {
                 eprintln!("Error: --profile <dir> is required");
@@ -162,7 +150,9 @@ fn main() {
                 eprintln!("Usage: bdemu validate <profile_dir>");
                 std::process::exit(1);
             }
-            validate_profile(&args[2]);
+            if !validate_profile(&args[2]) {
+                std::process::exit(1);
+            }
         }
 
         "status" => send_control("status", false),
@@ -202,21 +192,68 @@ fn main() {
     }
 }
 
-/// Take the value at `idx` for a flag that requires one, exiting with a clear
-/// error if it is missing or looks like another flag. Without this, the old
+/// The value a flag requires, or `None` if it is missing or looks like another
+/// flag. The `!v.starts_with('-')` guard is the point: the old
 /// `args.get(i).cloned()` silently swallowed the following token, so
 /// `bdemu run --profile --disc x` set profile="--disc" and then complained about
-/// a missing command — a confusing diagnostic for a simple typo.
-fn take_flag_value(args: &[String], idx: usize, flag: &str) -> String {
+/// a missing command — a confusing diagnostic for a simple typo. Kept pure (no
+/// exit, no printing) so `parse_run_args` can report the specific flag and the
+/// guard is unit-testable.
+fn flag_value(args: &[String], idx: usize) -> Option<&String> {
     match args.get(idx) {
-        Some(v) if !v.starts_with('-') => v.clone(),
-        _ => {
-            eprintln!("Error: missing {} value", flag);
-            eprintln!();
-            eprintln!("Usage: bdemu run --profile <dir> [--disc <name>] -- <command> [args...]");
-            std::process::exit(1);
-        }
+        Some(v) if !v.starts_with('-') => Some(v),
+        _ => None,
     }
+}
+
+/// The parsed result of the `bdemu run` flag scan.
+struct RunArgs {
+    profile: Option<String>,
+    disc: Option<String>,
+    /// Index into `args` where the child command begins (0 = none found).
+    cmd_start: usize,
+}
+
+/// Scan `bdemu run` arguments (from index 2) into a `RunArgs`. Returns
+/// `Err(flag_name)` when a value-taking flag is missing its value, so the caller
+/// can print the diagnostic and exit — the scan itself neither prints nor exits,
+/// which is what lets it be unit-tested. Behaviour matches the previous inline
+/// loop exactly: `--`/first-positional stop the scan, and a flag whose value
+/// looks like another flag is a missing-value error.
+fn parse_run_args(args: &[String]) -> Result<RunArgs, &'static str> {
+    let mut profile: Option<String> = None;
+    let mut disc: Option<String> = None;
+    let mut cmd_start = 0;
+
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--profile" | "-p" => {
+                i += 1;
+                profile = Some(flag_value(args, i).ok_or("--profile")?.clone());
+            }
+            "--disc" | "-d" => {
+                i += 1;
+                disc = Some(flag_value(args, i).ok_or("--disc")?.clone());
+            }
+            "--" => {
+                cmd_start = i + 1;
+                break;
+            }
+            _ => {
+                // First non-flag arg starts the command.
+                cmd_start = i;
+                break;
+            }
+        }
+        i += 1;
+    }
+
+    Ok(RunArgs {
+        profile,
+        disc,
+        cmd_start,
+    })
 }
 
 /// Map a finished child's status to a process exit code. A child killed by a
@@ -313,7 +350,13 @@ fn blob_state(path: &std::path::Path) -> BlobState {
     )
 }
 
-fn validate_profile(dir: &str) {
+/// Validate a profile directory, printing a report. Returns `true` when the
+/// profile is complete enough to emulate (`bdemu validate` exits 0) and `false`
+/// when a required file is missing/empty/unreadable (exit 1). The exit itself
+/// lives in the caller so the pass/fail decision is unit-testable without
+/// terminating the test process — a CI profile gate depends on this returning
+/// false for a broken profile, and nothing exercised that before.
+fn validate_profile(dir: &str) -> bool {
     use std::path::Path;
     let p = Path::new(dir);
 
@@ -500,10 +543,11 @@ fn validate_profile(dir: &str) {
         println!("Profile OK ({} warnings)", warnings);
     } else {
         println!("Profile INCOMPLETE — missing required files");
-        // Signal failure so a CI step gating on a complete profile fails on a
-        // broken one (the warnings-only OK path still exits 0).
-        std::process::exit(1);
     }
+    // Return the verdict; the caller maps `false` to a non-zero exit so a CI step
+    // gating on a complete profile fails on a broken one (the warnings-only OK
+    // path still exits 0).
+    ok
 }
 
 /// Send one control-socket command and relay the reply.
@@ -558,13 +602,13 @@ fn send_control(cmd: &str, slow_read: bool) {
     }
 
     // Bound the read: a hung emulator (connected but never replies) would
-    // otherwise stall the CLI forever. On timeout the read errors out, lines()
-    // ends (map_while stops on Err), and response_is_error treats the
-    // partial/empty result as a failure so the CLI exits non-zero. `load` is the
-    // exception: it can legitimately take many minutes (multi-GB synchronous
-    // sectors.bin read on the emulator, slower still on NFS), so it gets a 30-min
-    // ceiling that still bounds a truly dead emulator. Fast commands keep the
-    // tight 5s timeout.
+    // otherwise stall the CLI forever. On timeout the read errors out before the
+    // terminator arrives, so the loop below leaves `terminated` false and
+    // classify_response reports Truncated → the CLI exits non-zero rather than
+    // acting on a partial reply. `load` is the exception: it can legitimately take
+    // many minutes (multi-GB synchronous sectors.bin read on the emulator, slower
+    // still on NFS), so it gets a 30-min ceiling that still bounds a truly dead
+    // emulator. Fast commands keep the tight 5s timeout.
     let read_timeout = if slow_read {
         Duration::from_secs(1800)
     } else {
@@ -575,23 +619,75 @@ fn send_control(cmd: &str, slow_read: bool) {
         std::process::exit(1);
     }
 
+    // Read the reply line by line, stopping at the terminator sentinel. A read
+    // error (notably a timeout) or EOF before the terminator arrives means the
+    // response was cut short — `terminated` stays false and the CLI fails loudly
+    // rather than acting on a partial reply (the old
+    // `lines().map_while(Result::ok).collect()` silently dropped the tail, so a
+    // truncated `list-discs` printed clean and exited 0).
     let reader = BufReader::new(&stream);
-    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-
-    // The control protocol prefixes success with "OK" and failure with
-    // "ERR ..." (see control.rs Response). send_control previously printed every
-    // line and returned, so `bdemu load <bad-name>` reported the error but still
-    // exited 0 — defeating script/CI gating. Treat any "ERR " line (or a missing
-    // leading "OK") as a failure: print to stderr and exit non-zero.
-    if response_is_error(&lines) {
-        for line in &lines {
-            eprintln!("{}", line);
+    let mut lines: Vec<String> = Vec::new();
+    let mut terminated = false;
+    for item in reader.lines() {
+        match item {
+            Ok(l) if l == socket_name::CONTROL_TERMINATOR => {
+                terminated = true;
+                break;
+            }
+            Ok(l) => lines.push(l),
+            Err(_) => break,
         }
-        std::process::exit(1);
     }
 
-    for line in &lines {
-        println!("{}", line);
+    match classify_response(&lines, terminated) {
+        ControlOutcome::Truncated => {
+            eprintln!(
+                "bdemu: control response was truncated before its terminator \
+                 (the emulator may have timed out or crashed mid-reply)"
+            );
+            for line in &lines {
+                eprintln!("{}", line);
+            }
+            std::process::exit(1);
+        }
+        // The control protocol prefixes success with "OK" and failure with
+        // "ERR ..." (see control.rs Response). `bdemu load <bad-name>` must exit
+        // non-zero so script/CI gating works: print the reply to stderr and fail.
+        ControlOutcome::Error => {
+            for line in &lines {
+                eprintln!("{}", line);
+            }
+            std::process::exit(1);
+        }
+        ControlOutcome::Ok => {
+            for line in &lines {
+                println!("{}", line);
+            }
+        }
+    }
+}
+
+/// How the CLI should treat a control-socket reply.
+#[derive(Debug, PartialEq, Eq)]
+enum ControlOutcome {
+    Ok,
+    Error,
+    /// The terminator never arrived: the reply was cut short (emulator timeout or
+    /// crash), so it must NOT be acted on as if complete.
+    Truncated,
+}
+
+/// Classify a reply from its lines and whether the terminator was seen. Pulled
+/// out of `send_control` so the truncation/error policy is unit-testable without a
+/// socket. Truncation takes precedence over content: a reply missing its
+/// terminator is untrustworthy even if the bytes that did arrive start with "OK".
+fn classify_response(lines: &[String], terminated: bool) -> ControlOutcome {
+    if !terminated {
+        ControlOutcome::Truncated
+    } else if response_is_error(lines) {
+        ControlOutcome::Error
+    } else {
+        ControlOutcome::Ok
     }
 }
 
@@ -606,7 +702,26 @@ fn response_is_error(lines: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::response_is_error;
+    use super::{
+        ControlOutcome, classify_response, exit_code_for, flag_value, parse_run_args,
+        response_is_error, validate_profile,
+    };
+
+    /// A per-test scratch directory under the crate's `target/` (never /tmp, per
+    /// the project no-/tmp scratch rule); `cargo clean` reclaims it.
+    fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scratch")
+            .join(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test scratch dir");
+        dir
+    }
+
+    fn s(v: &str) -> String {
+        v.to_string()
+    }
 
     /// The CLI's connect side and the emulator's bind side must agree on the
     /// socket path; both now derive it from the one shared `socket_name` module,
@@ -691,5 +806,174 @@ mod tests {
             BlobState::Unreadable
         );
         assert!(classify_blob(Err(ErrorKind::PermissionDenied)).is_broken());
+    }
+
+    /// MED (round-2): the control protocol has no terminator, so a reply cut short
+    /// by a read timeout after "OK\n" was indistinguishable from a complete one and
+    /// `bdemu list-discs` printed a partial list and exited 0. classify_response
+    /// treats a MISSING terminator as truncation regardless of what did arrive.
+    /// Catches the mutation that ignores `terminated` (the old behaviour).
+    #[test]
+    fn missing_terminator_is_truncation_even_if_it_starts_ok() {
+        // Terminator seen: ordinary OK / ERR handling.
+        assert_eq!(
+            classify_response(&[s("OK"), s("  disc-a (sectors=true)")], true),
+            ControlOutcome::Ok
+        );
+        assert_eq!(
+            classify_response(&[s("ERR disc not found")], true),
+            ControlOutcome::Error
+        );
+        // Terminator NOT seen: truncated, even though the bytes that arrived look
+        // like a valid OK response. This is the whole point of the fix.
+        assert_eq!(
+            classify_response(&[s("OK"), s("  disc-a (sectors=true)")], false),
+            ControlOutcome::Truncated
+        );
+        // Nothing at all, unterminated: also truncated (not a bare error).
+        assert_eq!(classify_response(&[], false), ControlOutcome::Truncated);
+        // Empty but TERMINATED reply (no OK line) is a genuine error, not truncation.
+        assert_eq!(classify_response(&[], true), ControlOutcome::Error);
+    }
+
+    /// The `!v.starts_with('-')` guard in flag_value: a flag's value that looks
+    /// like another flag is a MISSING value, not the value. Catches the regression
+    /// where `bdemu run --profile --disc x` silently set profile="--disc".
+    #[test]
+    fn flag_value_rejects_a_following_flag_and_missing_value() {
+        let args = vec![s("bdemu"), s("run"), s("--profile"), s("mydir")];
+        assert_eq!(
+            flag_value(&args, 3),
+            Some(&s("mydir")),
+            "a plain value is taken"
+        );
+
+        let swallow = vec![s("bdemu"), s("run"), s("--profile"), s("--disc")];
+        assert_eq!(
+            flag_value(&swallow, 3),
+            None,
+            "a value that looks like a flag must be refused, not swallowed"
+        );
+
+        // Past the end of args -> None (missing value).
+        assert_eq!(flag_value(&args, 99), None);
+    }
+
+    /// The `bdemu run` flag scan: flags before `--`, the first positional starting
+    /// the command, and a missing flag value surfacing as Err(flag). Catches
+    /// mutations to the loop's stop conditions or index handling.
+    #[test]
+    fn parse_run_args_covers_the_flag_scan() {
+        // Full form with an explicit `--` separator.
+        let a = [
+            "bdemu",
+            "run",
+            "--profile",
+            "p",
+            "--disc",
+            "d",
+            "--",
+            "cmd",
+            "arg",
+        ]
+        .map(s)
+        .to_vec();
+        let r = parse_run_args(&a).expect("well-formed");
+        assert_eq!(r.profile.as_deref(), Some("p"));
+        assert_eq!(r.disc.as_deref(), Some("d"));
+        assert_eq!(r.cmd_start, 7, "cmd_start points just past `--`");
+
+        // Short flags, no `--`: the first non-flag token starts the command.
+        let b = ["bdemu", "run", "-p", "p", "cmd", "arg"].map(s).to_vec();
+        let r = parse_run_args(&b).expect("well-formed");
+        assert_eq!(r.profile.as_deref(), Some("p"));
+        assert!(r.disc.is_none());
+        assert_eq!(r.cmd_start, 4);
+
+        // No flags at all: the command starts immediately.
+        let c = ["bdemu", "run", "cmd"].map(s).to_vec();
+        let r = parse_run_args(&c).expect("well-formed");
+        assert!(r.profile.is_none());
+        assert_eq!(r.cmd_start, 2);
+
+        // A flag missing its value (next token looks like a flag) is an error
+        // naming that flag.
+        let d = ["bdemu", "run", "--profile", "--disc", "x"].map(s).to_vec();
+        assert!(
+            matches!(parse_run_args(&d), Err("--profile")),
+            "a flag whose value looks like another flag is a missing-value error"
+        );
+    }
+
+    /// exit_code_for maps a signal-killed child to 128+signum (so CI can tell a
+    /// crash from an ordinary non-zero exit) and a normal exit to its code. Catches
+    /// a mutation that collapses signals to a bare 1.
+    #[test]
+    fn exit_code_for_distinguishes_signals_from_normal_exit() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::ExitStatus;
+
+        // Wait-status encoding: exit code n is (n << 8); a signal is the low 7 bits.
+        assert_eq!(exit_code_for(&ExitStatus::from_raw(0)), 0, "clean exit");
+        assert_eq!(
+            exit_code_for(&ExitStatus::from_raw(5 << 8)),
+            5,
+            "exit code 5"
+        );
+        assert_eq!(
+            exit_code_for(&ExitStatus::from_raw(9)),
+            128 + 9,
+            "SIGKILL must be 137, not a bare 1"
+        );
+        assert_eq!(
+            exit_code_for(&ExitStatus::from_raw(11)),
+            128 + 11,
+            "SIGSEGV must be 139"
+        );
+    }
+
+    /// MED (round-2): `bdemu validate` is a CI profile gate, but nothing drove its
+    /// pass/fail verdict. A complete profile must validate (true), and a broken one
+    /// — a required blob missing, or a zero-byte sectors.bin from an interrupted
+    /// capture — must fail (false, which the caller turns into exit 1). Catches a
+    /// mutation that drops an `ok = false` assignment (so a broken profile passes).
+    #[test]
+    fn validate_returns_true_only_for_a_complete_profile() {
+        let root = test_scratch_dir("validate_exit");
+
+        // A complete-enough profile: drive.toml + 96-byte inquiry + the three
+        // required feature blobs. No discs dir is a warning, not a failure.
+        let good = root.join("good");
+        std::fs::create_dir_all(&good).unwrap();
+        std::fs::write(good.join("drive.toml"), "[drive]\nproduct = \"X\"\n").unwrap();
+        std::fs::write(good.join("inquiry.bin"), vec![0u8; 96]).unwrap();
+        for f in ["gc_0000.bin", "gc_0108.bin", "gc_010c.bin"] {
+            std::fs::write(good.join(f), vec![1u8; 8]).unwrap();
+        }
+        assert!(
+            validate_profile(good.to_str().unwrap()),
+            "a complete profile must validate clean"
+        );
+
+        // Break it with an interrupted-capture disc: a zero-byte sectors.bin.
+        let disc = good.join("discs").join("d1");
+        std::fs::create_dir_all(&disc).unwrap();
+        std::fs::write(disc.join("toc.bin"), vec![1u8; 4]).unwrap();
+        std::fs::write(disc.join("sectors.bin"), Vec::<u8>::new()).unwrap();
+        assert!(
+            !validate_profile(good.to_str().unwrap()),
+            "a zero-byte sectors.bin (interrupted capture) must fail the gate"
+        );
+
+        // A profile missing the required inquiry/features fails too.
+        let bad = root.join("bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(bad.join("drive.toml"), "[drive]\nproduct = \"X\"\n").unwrap();
+        assert!(
+            !validate_profile(bad.to_str().unwrap()),
+            "a profile missing inquiry/features must fail the gate"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
