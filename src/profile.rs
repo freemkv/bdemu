@@ -655,7 +655,7 @@ fn is_contained_blob_name(name: &str) -> bool {
 /// THIRD-PARTY UNTRUSTED artifacts shared through the documented GitHub-issue
 /// workflow (SCHEMA.md / profile-from-issue.yml turns an issue body into one of
 /// these directories). The previous `read_bin(&dir.join(&name))` joined them raw,
-/// so a hostile profile could set `inquiry = "../../../../home/op/.ssh/id_rsa"`
+/// so a hostile profile could set `inquiry = "../../../../etc/shadow"`
 /// (or any absolute path) and bdemu would read that file and serve its bytes back
 /// as the emulated INQUIRY / feature / read-buffer response — an arbitrary
 /// local-file read surfaced over SCSI and into the logs. Round 1 added
