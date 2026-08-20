@@ -1,8 +1,31 @@
 # Changelog
 
-## [Unreleased]
+## [1.6.5] — 2026-08-20
+
+### Security
+
+- **A profile could read files outside its own directory.** The blob
+  filenames in `drive.toml`'s `[files]`, `[features]` and `[read_buffer]`
+  sections were joined onto the profile directory with no containment, so a
+  shared profile with `inquiry = "../../../../etc/shadow"` made bdemu read
+  that file and serve it back as the emulated INQUIRY / feature / READ
+  BUFFER response. Round-1 hardening covered the disc *directory* name but
+  left these blob *names* raw; any name that escapes the profile directory
+  is now refused (logged and treated as absent), for `inquiry`,
+  `rpc_state`, `mode_2a` and every feature and read-buffer value. Profiles
+  are third-party artifacts shared through the GitHub-issue workflow, so
+  their filenames are untrusted.
 
 ### Fixed
+
+- **A corrupt captured sector map no longer serves the wrong sector's bytes
+  as success.** A `sectors.bin` with overlapping BDSM ranges made the
+  binary-search lookup return an arbitrary match, handing the host one
+  sector's data in answer to a request for another — at GOOD status.
+  Overlapping ranges are now rejected, and a read near the top of the
+  address space (an LBA close to `u32::MAX`) no longer wraps around to
+  serve low sectors as GOOD — addresses are computed in 64-bit and anything
+  past `u32::MAX` is a miss.
 
 - **A read the fixture cannot satisfy is no longer reported as success.**
   READ(10)/READ(12) returned GOOD status with a zero-filled buffer whenever the
