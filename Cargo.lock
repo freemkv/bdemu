@@ -33,7 +33,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bdemu"
-version = "1.6.4"
+version = "1.6.5"
 dependencies = [
  "freemkv-unlock",
  "libc",
@@ -231,7 +231,8 @@ dependencies = [
 
 [[package]]
 name = "freemkv-unlock"
-version = "1.6.4"
+version = "1.6.5"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.6.5#1bc3fb7ef8163e3b99e5aa82df05f82d0239935e"
 dependencies = [
  "aes",
  "base64",
@@ -315,7 +316,8 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libfreemkv"
-version = "1.6.4"
+version = "1.6.5"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.6.5#9560248c49a63d422470a8c0c93a0f434ab00142"
 dependencies = [
  "aes",
  "base64",
@@ -647,15 +649,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "freemkv-engine"
-version = "1.6.4"
-
-[[patch.unused]]
-name = "freemkv-i18n"
-version = "1.6.4"
-
-[[patch.unused]]
-name = "freemkv-keysources"
-version = "1.6.4"
