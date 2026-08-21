@@ -1,6 +1,6 @@
 [package]
 name = "bdemu"
-version = "1.6.5"
+version = "1.6.6"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -42,4 +42,4 @@ codegen-units = 1
 # Cargo.lock. Local dev overrides it with a path patch via the gitignored
 # .cargo/config.toml.
 [patch.crates-io]
-libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.6.5" }
+libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.6.6" }
