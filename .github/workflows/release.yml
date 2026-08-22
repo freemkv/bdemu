@@ -118,26 +118,12 @@ jobs:
         with:
           files: '*.tar.gz'
 
-  update-readme:
-    needs: build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: main
-      - name: Update version in README
-        run: |
-          VERSION="${{ github.ref_name }}"
-          DATE="$(date -u '+%Y-%m-%d')"
-          sed -i "s|^\*\*Latest: v[0-9]*\.[0-9]*\.[0-9]*.*(.*)\*\*|**Latest: ${VERSION} (${DATE})**|" README.md
-          sed -i "s|^\*\*Latest: v[0-9]*\.[0-9]*\.[0-9]*\*\*|**Latest: ${VERSION} (${DATE})**|" README.md
-          sed -i "s|bdemu-v[0-9]*\.[0-9]*\.[0-9]*|bdemu-${VERSION}|g" README.md
-          sed -i "s|/download/v[0-9]*\.[0-9]*\.[0-9]*/|/download/${VERSION}/|g" README.md
-          sed -i "s|bdemu [0-9]*\.[0-9]*\.[0-9]*|bdemu ${VERSION#v}|g" README.md
-      - name: Commit and push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git diff --cached --quiet || git commit -m "Update to bdemu ${{ github.ref_name }}"
-          git push
+  # NOTE: a former `update-readme` job used to check out `main`, rewrite the
+  # README version strings, and push an "Update to bdemu vX.Y.Z" commit straight
+  # to `main` on every tag. It was removed 2026-08-22 because it RACED the
+  # unified release: release.sh already bumps this README inside the tagged
+  # commit and then fast-forwards `main` to that commit — the bot instead pushed
+  # a redundant README bump onto the OLD main, diverging it from the tag so
+  # release.sh's advance-main step (FF-only) refused and every release died at
+  # bdemu. The README bump is owned by release.sh; nothing but release.sh should
+  # write to `main`.
