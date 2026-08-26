@@ -1,5 +1,6 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/freemkv/bdemu?label=latest&color=brightgreen)](https://github.com/freemkv/bdemu/releases/latest)
+[![codecov](https://codecov.io/gh/freemkv/bdemu/branch/dev/graph/badge.svg)](https://codecov.io/gh/freemkv/bdemu)
 
 # bdemu
 
