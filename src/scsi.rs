@@ -99,7 +99,7 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
         firmware_date: lf_drive_id.firmware_date.clone(),
     };
 
-    // Search the LibreDrive bundled profiles via freemkv-unlock's public catalog
+    // Search the bundled drive-unlock profiles via freemkv-unlock's public catalog
     // API (the single freemkv-unlock crate, same crate libfreemkv depends on).
     if let Some(profiles) = freemkv_unlock::ld::profiles() {
         if let Some(m) = profiles.get(&drive_id)
