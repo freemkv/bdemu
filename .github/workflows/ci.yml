@@ -222,6 +222,7 @@ jobs:
         working-directory: bdemu
       - uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: bdemu/lcov.info
           slug: freemkv/bdemu
           fail_ci_if_error: false
