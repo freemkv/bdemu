@@ -1947,4 +1947,470 @@ mod tests {
             "an empty response zero-fills the host buffer"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Opcode dispatch coverage — one command per handler through handle_scsi,
+    // asserting SCSI status and the load-bearing response bytes. All lock
+    // TEST_GUARD and clear MEDIA_CHANGED so a stray UNIT ATTENTION from a
+    // concurrent test can never pre-empt the handler under test.
+    // ------------------------------------------------------------------
+
+    /// Lock the global SCSI state and clear MEDIA_CHANGED for a handler test.
+    fn guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        MEDIA_CHANGED.store(false, Ordering::SeqCst);
+        NEW_MEDIA_EVENT.store(false, Ordering::SeqCst);
+        save_sense(0, 0, 0);
+        g
+    }
+
+    /// Run one command through the dispatcher; return (status, data, sense).
+    fn run(profile: &LoadedProfile, cdb: &[u8], dxfer: usize) -> (u8, Vec<u8>, [u8; 32]) {
+        let mut data = vec![0u8; dxfer];
+        let mut sense = [0u8; 32];
+        let mut hdr = hdr_for(cdb, &mut data, &mut sense);
+        handle_scsi(&mut hdr, profile);
+        (hdr.status, data, sense)
+    }
+
+    // --- 0x12 INQUIRY ---
+
+    #[test]
+    fn inquiry_standard_returns_profile_inquiry() {
+        let _g = guard();
+        let (status, _, _) = run(&empty_profile(), &[0x12, 0x00, 0x00, 0, 96, 0], 96);
+        assert_eq!(status, 0x00, "standard INQUIRY must be GOOD");
+    }
+
+    #[test]
+    fn inquiry_vpd_page_00_lists_supported_pages() {
+        let _g = guard();
+        let (status, data, _) = run(&empty_profile(), &[0x12, 0x01, 0x00, 0, 8, 0], 8);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[1], 0x00, "page code echoed");
+        assert!(data[..6].contains(&0x80), "page 0x80 must be advertised");
+    }
+
+    #[test]
+    fn inquiry_vpd_page_80_returns_serial() {
+        let _g = guard();
+        let mut p = empty_profile();
+        // Feature 0x0108 carries the serial after its 4-byte descriptor header.
+        p.features
+            .push((0x0108, vec![0x01, 0x08, 0x00, 0x00, b'S', b'N', b'9']));
+        let (status, data, _) = run(&p, &[0x12, 0x01, 0x80, 0, 16, 0], 16);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[1], 0x80, "page code");
+        assert_eq!(data[3], 3, "serial length");
+        assert_eq!(&data[4..7], b"SN9");
+    }
+
+    #[test]
+    fn inquiry_vpd_unsupported_page_is_illegal_request() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x12, 0x01, 0x83, 0, 8, 0], 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x05, "ILLEGAL REQUEST");
+        assert_eq!(sense[12], 0x24);
+    }
+
+    // --- 0x25 READ CAPACITY ---
+
+    #[test]
+    fn read_capacity_from_disc() {
+        let _g = guard();
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.capacity = vec![0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 8, 0];
+        }
+        let (status, data, _) = run(&p, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
+        assert_eq!(status, 0x00);
+        assert_eq!(&data[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn read_capacity_no_medium_is_not_ready() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x02, "NOT READY");
+        assert_eq!(sense[12], 0x3A);
+    }
+
+    #[test]
+    fn read_capacity_default_when_no_capacity_captured() {
+        let _g = guard();
+        let (status, data, _) = run(&disc_profile(), &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8);
+        assert_eq!(status, 0x00);
+        assert_eq!(
+            u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
+            12219391,
+            "default BD-SL last LBA"
+        );
+        assert_eq!(
+            u32::from_be_bytes([data[4], data[5], data[6], data[7]]),
+            SECTOR_SIZE as u32
+        );
+    }
+
+    // --- 0x46 GET CONFIGURATION ---
+
+    fn profile_with_features() -> LoadedProfile {
+        let mut p = empty_profile();
+        // 0x0001: current (bit0 of byte 2 set); 0x0002: not current.
+        p.features.push((0x0001, vec![0x00, 0x01, 0x01, 0x00]));
+        p.features.push((0x0002, vec![0x00, 0x02, 0x00, 0x00]));
+        p
+    }
+
+    #[test]
+    fn get_config_rt0_returns_all_features() {
+        let _g = guard();
+        let (status, data, _) = run(
+            &profile_with_features(),
+            &[0x46, 0x00, 0, 0, 0, 0, 0, 0, 64, 0],
+            64,
+        );
+        assert_eq!(status, 0x00);
+        // header(8) + both 4-byte feature descriptors = 16 payload bytes.
+        let data_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        assert_eq!(data_len, 4 + 8, "data length = 4 + body(8)");
+    }
+
+    #[test]
+    fn get_config_rt1_returns_only_current_features() {
+        let _g = guard();
+        let (status, data, _) = run(
+            &profile_with_features(),
+            &[0x46, 0x01, 0, 0, 0, 0, 0, 0, 64, 0],
+            64,
+        );
+        assert_eq!(status, 0x00);
+        // Only the current feature (4 bytes) survives the rt=1 filter.
+        let data_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        assert_eq!(data_len, 4 + 4, "only current feature in body");
+    }
+
+    #[test]
+    fn get_config_rt2_single_feature_present() {
+        let _g = guard();
+        let (status, data, _) = run(
+            &profile_with_features(),
+            &[0x46, 0x02, 0x00, 0x01, 0, 0, 0, 0, 64, 0],
+            64,
+        );
+        assert_eq!(status, 0x00);
+        assert_eq!(
+            &data[8..12],
+            &[0x00, 0x01, 0x01, 0x00],
+            "the single feature"
+        );
+    }
+
+    #[test]
+    fn get_config_rt2_single_feature_absent_returns_header_only() {
+        let _g = guard();
+        let (status, data, _) = run(
+            &profile_with_features(),
+            &[0x46, 0x02, 0x00, 0xFF, 0, 0, 0, 0, 64, 0],
+            64,
+        );
+        assert_eq!(status, 0x00);
+        let data_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        assert_eq!(data_len, 4, "absent feature -> header only");
+    }
+
+    // --- 0x4A GET EVENT STATUS NOTIFICATION ---
+
+    #[test]
+    fn get_event_status_async_unsupported() {
+        let _g = guard();
+        // polled bit clear.
+        let (status, _, sense) = run(&disc_profile(), &[0x4A, 0x00, 0, 0, 0x10, 0, 0, 0, 8, 0], 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x05, "ILLEGAL REQUEST");
+        assert_eq!(sense[12], 0x24);
+    }
+
+    #[test]
+    fn get_event_status_no_media_class_requested() {
+        let _g = guard();
+        // polled, but class request bitmap does not include media (bit4).
+        let (status, data, _) = run(&disc_profile(), &[0x4A, 0x01, 0, 0, 0x00, 0, 0, 0, 4, 0], 4);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[3], 0x10, "media class still advertised as supported");
+    }
+
+    #[test]
+    fn get_event_status_no_disc_reports_no_media() {
+        let _g = guard();
+        let (status, data, _) = run(
+            &empty_profile(),
+            &[0x4A, 0x01, 0, 0, 0x10, 0, 0, 0, 8, 0],
+            8,
+        );
+        assert_eq!(status, 0x00);
+        assert_eq!(data[5], 0x00, "no media present");
+    }
+
+    // --- 0x51 READ DISC INFORMATION ---
+
+    #[test]
+    fn read_disc_info_not_ready_without_disc() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x51, 0, 0, 0, 0, 0, 0, 0, 34, 0], 34);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[12], 0x3A);
+    }
+
+    #[test]
+    fn read_disc_info_default_when_disc_present() {
+        let _g = guard();
+        let (status, data, _) = run(&disc_profile(), &[0x51, 0, 0, 0, 0, 0, 0, 0, 34, 0], 34);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[1], 0x20, "default disc-info data length");
+    }
+
+    #[test]
+    fn read_disc_info_from_disc_when_captured() {
+        let _g = guard();
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.disc_info = vec![0x00, 0x99, 0x0E, 0x01];
+        }
+        let (status, data, _) = run(&p, &[0x51, 0, 0, 0, 0, 0, 0, 0, 34, 0], 34);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[1], 0x99, "captured disc info served");
+    }
+
+    // --- 0x5A MODE SENSE(10) ---
+
+    #[test]
+    fn mode_sense_page_2a_default() {
+        let _g = guard();
+        let (status, data, _) = run(&empty_profile(), &[0x5A, 0, 0x2A, 0, 0, 0, 0, 0, 28, 0], 28);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[8], 0x2A, "page 2A code in default page");
+    }
+
+    #[test]
+    fn mode_sense_page_2a_from_profile() {
+        let _g = guard();
+        let mut p = empty_profile();
+        p.mode_2a = vec![0x00, 0x1A, 0, 0, 0, 0, 0, 0, 0x2A, 0x12];
+        let (status, data, _) = run(&p, &[0x5A, 0, 0x2A, 0, 0, 0, 0, 0, 10, 0], 10);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[9], 0x12, "profile mode_2a served verbatim");
+    }
+
+    #[test]
+    fn mode_sense_page_3f_all_pages() {
+        let _g = guard();
+        let mut p = empty_profile();
+        p.mode_2a = vec![0x00, 0x1A, 0, 0, 0, 0, 0, 0];
+        let (status, _, _) = run(&p, &[0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 8, 0], 8);
+        assert_eq!(status, 0x00, "MODE SENSE all-pages must be GOOD");
+    }
+
+    #[test]
+    fn mode_sense_unsupported_page_is_illegal_request() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x5A, 0, 0x10, 0, 0, 0, 0, 0, 8, 0], 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x05);
+        assert_eq!(sense[12], 0x24);
+    }
+
+    // --- 0xA4 REPORT KEY ---
+
+    #[test]
+    fn report_key_rpc_state_default() {
+        let _g = guard();
+        let cdb = [0xA4, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0x08, 0];
+        let (status, data, _) = run(&empty_profile(), &cdb, 8);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[4], 0x25, "default RPC state byte");
+    }
+
+    #[test]
+    fn report_key_unsupported_class_is_illegal_request() {
+        let _g = guard();
+        // AACS (class 0x02) is not modelled.
+        let cdb = [0xA4, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0x00, 0];
+        let (status, _, sense) = run(&empty_profile(), &cdb, 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x05);
+        assert_eq!(sense[12], 0x24);
+    }
+
+    // --- 0xAD READ DISC STRUCTURE ---
+
+    #[test]
+    fn read_disc_structure_not_ready_without_disc() {
+        let _g = guard();
+        let cdb = [0xAD, 0, 0, 0, 0, 0, 0, 0x00, 0, 0, 0, 0];
+        let (status, _, sense) = run(&empty_profile(), &cdb, 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[12], 0x3A);
+    }
+
+    #[test]
+    fn read_disc_structure_from_disc() {
+        let _g = guard();
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.disc_structures.insert(0x00, vec![0x11, 0x22, 0x33, 0x44]);
+        }
+        let cdb = [0xAD, 0, 0, 0, 0, 0, 0, 0x00, 0, 0, 0, 0];
+        let (status, data, _) = run(&p, &cdb, 4);
+        assert_eq!(status, 0x00);
+        assert_eq!(&data[..4], &[0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn read_disc_structure_absent_format_returns_empty_header() {
+        let _g = guard();
+        let cdb = [0xAD, 0, 0, 0, 0, 0, 0, 0x07, 0, 0, 0, 0];
+        let (status, data, _) = run(&disc_profile(), &cdb, 4);
+        assert_eq!(status, 0x00, "absent format is empty header, not an error");
+        assert_eq!(data[1], 0x02, "empty-header length field");
+    }
+
+    // --- 0x43 READ TOC ---
+
+    #[test]
+    fn read_toc_not_ready_without_disc() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x43, 0, 0, 0, 0, 0, 0, 0, 12, 0], 12);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[12], 0x3A);
+    }
+
+    #[test]
+    fn read_toc_default_when_disc_present() {
+        let _g = guard();
+        let (status, data, _) = run(&disc_profile(), &[0x43, 0, 0, 0, 0, 0, 0, 0, 12, 0], 12);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[2], 0x01, "default first track");
+        assert_eq!(data[3], 0x01, "default last track");
+    }
+
+    #[test]
+    fn read_toc_from_disc_when_captured() {
+        let _g = guard();
+        let mut p = disc_profile();
+        if let Some(d) = p.disc.as_mut() {
+            d.toc = vec![0x00, 0x0A, 0x01, 0x05];
+        }
+        let (status, data, _) = run(&p, &[0x43, 0, 0, 0, 0, 0, 0, 0, 4, 0], 4);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[3], 0x05, "captured TOC served");
+    }
+
+    // --- 0x00 TEST UNIT READY ---
+
+    #[test]
+    fn test_unit_ready_good_with_disc() {
+        let _g = guard();
+        let (status, _, _) = run(&disc_profile(), &[0x00, 0, 0, 0, 0, 0], 0);
+        assert_eq!(status, 0x00, "TEST UNIT READY with a disc is GOOD");
+    }
+
+    #[test]
+    fn test_unit_ready_not_ready_without_disc() {
+        let _g = guard();
+        let (status, _, sense) = run(&empty_profile(), &[0x00, 0, 0, 0, 0, 0], 0);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[12], 0x3A);
+    }
+
+    // --- 0x1B START STOP UNIT ---
+
+    #[test]
+    fn start_stop_unit_variants_are_good() {
+        let _g = guard();
+        for cdb4 in [0x00u8, 0x01, 0x02, 0x03] {
+            let (status, _, _) = run(&empty_profile(), &[0x1B, 0, 0, 0, cdb4, 0], 0);
+            assert_eq!(
+                status, 0x00,
+                "START STOP UNIT cdb[4]={cdb4:#x} must be GOOD"
+            );
+        }
+    }
+
+    // --- 0x1E PREVENT ALLOW MEDIUM REMOVAL ---
+
+    #[test]
+    fn prevent_allow_removal_is_good() {
+        let _g = guard();
+        let (status, _, _) = run(&empty_profile(), &[0x1E, 0, 0, 0, 0x01, 0], 0);
+        assert_eq!(status, 0x00);
+    }
+
+    // --- 0x3C READ BUFFER data/descriptor modes ---
+
+    #[test]
+    fn read_buffer_mode2_serves_profile_buffer() {
+        let _g = guard();
+        let mut p = empty_profile();
+        p.read_bufs.push((0x02, vec![0xAB, 0xCD]));
+        // buf id 0x02, ensure it is not an unlock shape.
+        assert!(!freemkv_unlock::ld::is_unlock_read_buffer(2, 0x02));
+        let cdb = [0x3C, 0x02, 0x02, 0, 0, 0, 0, 0, 2, 0];
+        let (status, data, _) = run(&p, &cdb, 2);
+        assert_eq!(status, 0x00);
+        assert_eq!(&data[..2], &[0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn read_buffer_mode2_missing_buffer_is_illegal_request() {
+        let _g = guard();
+        let cdb = [0x3C, 0x02, 0x7E, 0, 0, 0, 0, 0, 8, 0];
+        let (status, _, sense) = run(&empty_profile(), &cdb, 8);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[12], 0x24);
+    }
+
+    #[test]
+    fn read_buffer_mode3_returns_descriptor() {
+        let _g = guard();
+        let cdb = [0x3C, 0x03, 0x00, 0, 0, 0, 0, 0, 4, 0];
+        let (status, _, _) = run(&empty_profile(), &cdb, 4);
+        assert_eq!(status, 0x00, "descriptor mode is GOOD");
+    }
+
+    // --- Ancillary GOOD-status opcodes and the unhandled arm ---
+
+    #[test]
+    fn write_buffer_is_good() {
+        let _g = guard();
+        let (status, _, _) = run(&empty_profile(), &[0x3B, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0);
+        assert_eq!(status, 0x00);
+    }
+
+    #[test]
+    fn send_key_is_good() {
+        let _g = guard();
+        let cdb = [0xA3, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0x01, 0];
+        let (status, _, _) = run(&empty_profile(), &cdb, 0);
+        assert_eq!(status, 0x00);
+    }
+
+    #[test]
+    fn set_cd_speed_is_good() {
+        let _g = guard();
+        let cdb = [0xBB, 0, 0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0];
+        let (status, _, _) = run(&empty_profile(), &cdb, 0);
+        assert_eq!(status, 0x00);
+    }
+
+    #[test]
+    fn unhandled_opcode_is_illegal_request() {
+        let _g = guard();
+        // 0xFF is not dispatched anywhere.
+        let (status, _, sense) = run(&empty_profile(), &[0xFF, 0, 0, 0, 0, 0], 0);
+        assert_eq!(status, 0x02);
+        assert_eq!(sense[2], 0x05, "ILLEGAL REQUEST");
+        assert_eq!(sense[12], 0x20, "INVALID COMMAND OPERATION CODE");
+    }
 }

@@ -9,7 +9,20 @@ coverage:
 
 comment: false
 
+# Codecov reports bdemu's files with a `bdemu/` repo-path prefix (e.g.
+# `bdemu/src/bin.rs`), so bare globs like `src/bin.rs` never match and the file
+# is silently still counted. Every entry is written `**/…` so it matches the
+# prefixed report path regardless of the repo layout.
 ignore:
-  - "ci/**"
-  - "profiles/**"
-  - "src/bin.rs"
+  - "**/ci/**"
+  - "**/profiles/**"
+  # CLI entrypoint: argument parsing + process wiring, driven end-to-end by the
+  # binary, not reachable from library unit tests.
+  - "**/src/bin.rs"
+  # LD_PRELOAD FFI shim: `#[no_mangle] extern "C"` ioctl/dlsym interposers that
+  # only ever run inside a preloaded target process. Unreachable by construction
+  # from unit tests (no preloaded process exists in the test harness).
+  - "**/src/lib.rs"
+  # Real-hardware capture path: `capture_disc`/`scsi_save` issue SG_IO to a
+  # physical SCSI/Blu-ray drive. Untestable without the device by construction.
+  - "**/src/capture.rs"
