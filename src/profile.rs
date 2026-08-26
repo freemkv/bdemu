@@ -1150,6 +1150,223 @@ mod tests {
         );
     }
 
+    /// `LoadedProfile::load` on a path that is neither a directory nor a
+    /// `.json` file must reject it explicitly, not silently return `None` via
+    /// some other path. Catches a mutation that drops the format-detection
+    /// `else` arm (and its diagnostic) entirely.
+    #[test]
+    fn load_rejects_unknown_format() {
+        let dir = test_scratch_dir("unknown_format");
+        let path = dir.join("profile.xyz");
+        std::fs::write(&path, b"irrelevant").unwrap();
+        assert!(
+            LoadedProfile::load(path.to_str().unwrap()).is_none(),
+            "a path that is neither a directory nor .json must be refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One `drive.toml` exercising every remaining loader branch that
+    /// `profile_loads_with_every_blob_missing` and
+    /// `blob_filenames_cannot_escape_the_profile_directory` do not: comment/blank
+    /// lines, an invalid `current_profile` (kept at default, not coerced to
+    /// 0x0000), an invalid `[features]` key (skipped, not coerced to 0x0000), an
+    /// invalid `[read_buffer]` key (skipped, not coerced to id 0), the no-op
+    /// `[unlock]` section, an unrecognised section (`_ => {}`), a *present*
+    /// feature/read_buffer blob (the positive load path, not just the
+    /// missing-file path), no `rpc_state` key at all (the `Vec::new()` default,
+    /// not the read-and-empty path), and a loose `rb_*.bin` file picked up by the
+    /// directory scan even though it is not listed in `drive.toml`.
+    #[test]
+    fn toml_loader_covers_malformed_entries_and_positive_blob_loads() {
+        let dir = test_scratch_dir("toml_full_coverage");
+        std::fs::write(
+            dir.join("drive.toml"),
+            "# a leading comment\n\
+             \n\
+             [drive]\n\
+             product = \"BDR-COVER\"\n\
+             current_profile = \"not-a-number\"\n\
+             \n\
+             [files]\n\
+             inquiry = \"inquiry.bin\"\n\
+             \n\
+             [features]\n\
+             0x0108 = \"feat_0108.bin\"\n\
+             bogus_key = \"ignored.bin\"\n\
+             \n\
+             [read_buffer]\n\
+             0xf1 = \"rb_f1.bin\"\n\
+             zz = \"ignored.bin\"\n\
+             \n\
+             [unlock]\n\
+             foo = \"bar\"\n\
+             \n\
+             [weird_section]\n\
+             x = \"y\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("feat_0108.bin"), b"featdata").unwrap();
+        std::fs::write(dir.join("rb_f1.bin"), b"rbdata1").unwrap();
+        // Not referenced in drive.toml at all: picked up by the rb_*.bin scan.
+        std::fs::write(dir.join("rb_f2.bin"), b"rbdata2").unwrap();
+
+        let p = LoadedProfile::load(dir.to_str().unwrap()).expect("must load");
+        assert_eq!(p.name, "BDR-COVER");
+        assert_eq!(
+            p.current_profile, 0x0043,
+            "an invalid current_profile must keep the default, not become 0x0000"
+        );
+        assert_eq!(
+            p.features,
+            vec![(0x0108, b"featdata".to_vec())],
+            "the bogus feature key must be skipped, the valid one loaded"
+        );
+        assert!(
+            p.rpc_state.is_empty(),
+            "no rpc_state key at all -> Vec::new() default"
+        );
+        let mut bufs = p.read_bufs.clone();
+        bufs.sort_by_key(|(id, _)| *id);
+        assert_eq!(
+            bufs,
+            vec![(0xf1, b"rbdata1".to_vec()), (0xf2, b"rbdata2".to_vec()),],
+            "the TOML-listed buffer and the loose rb_*.bin scan hit must both load"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The JSON loader's remaining branches: a valid `[read_buffer]` entry
+    /// alongside an invalid key (skipped, not coerced to id 0), an invalid
+    /// `current_profile` (kept at the 0x0043 default), and the optional
+    /// `mode_sense.page_2a` / `report_key.rpc_state` blobs actually present.
+    /// `json_invalid_feature_code_is_skipped_not_coerced_to_zero` covers the
+    /// `[features]` half; this covers the rest.
+    #[test]
+    fn json_loader_covers_read_buffer_and_optional_blobs() {
+        use std::io::Write;
+        let json = r#"{
+            "drive": { "product": "JSONDRV" },
+            "inquiry": { "raw": "00" },
+            "get_config": {
+                "current_profile": "garbage",
+                "features": {}
+            },
+            "mode_sense": { "page_2a": { "raw": "2a00" } },
+            "report_key": { "rpc_state": { "raw": "0102" } },
+            "read_buffer": {
+                "0xf1": { "raw": "aabb" },
+                "zz":   { "raw": "cc" }
+            }
+        }"#;
+        let path = test_scratch_dir("json_full_coverage").join(format!(
+            "full_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(json.as_bytes()).unwrap();
+        }
+
+        // Through the public `load()` dispatcher (not `load_json` directly) so
+        // the `.json`-extension routing branch itself is exercised too.
+        let p = LoadedProfile::load(path.to_str().unwrap()).expect("must load");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            p.current_profile, 0x0043,
+            "an invalid current_profile must keep the 0x0043 default"
+        );
+        assert_eq!(
+            p.read_bufs,
+            vec![(0xf1, vec![0xaa, 0xbb])],
+            "the invalid 'zz' key must be skipped, not coerced to id 0"
+        );
+        assert_eq!(p.mode_2a, vec![0x2a, 0x00]);
+        assert_eq!(p.rpc_state, vec![0x01, 0x02]);
+    }
+
+    /// `safe_disc_dir` when the base itself resolves (an existing `discs/`
+    /// directory) but the requested name does not exist under it: must reject via
+    /// the disc_dir-canonicalize-failure arm, not the base-canonicalize-failure
+    /// arm exercised by `safe_disc_dir_rejects_traversal`.
+    #[test]
+    fn safe_disc_dir_rejects_missing_target_under_existing_base() {
+        let base = test_scratch_dir("safe_disc_dir_existing_base");
+        assert!(safe_disc_dir(&base, "does_not_exist").is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `load_disc` must pick up `ds_*.bin` disc-structure files keyed by their
+    /// hex format-code suffix. Nothing previously exercised this scan.
+    #[test]
+    fn load_disc_picks_up_disc_structure_files() {
+        let dir = test_scratch_dir("load_disc_structures");
+        std::fs::write(dir.join("ds_08.bin"), b"structdata").unwrap();
+        let disc = super::load_disc(&dir);
+        assert_eq!(
+            disc.disc_structures.get(&0x08).map(|v| v.as_slice()),
+            Some(b"structdata".as_slice())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A blob past `MAX_BIN_BYTES` must be refused with an `Err` naming the size,
+    /// not silently truncated or OOM-ing the process. A sparse file (created via
+    /// `set_len`, not by writing real bytes) reports the oversized length to
+    /// `stat` without actually consuming disk.
+    #[test]
+    fn oversized_blob_is_rejected() {
+        let dir = test_scratch_dir("oversized_blob");
+        let path = dir.join("huge.bin");
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(super::MAX_BIN_BYTES + 1).unwrap();
+        }
+        let err = read_bin_reported(&path).expect_err("oversized blob must be refused");
+        assert!(err.contains("exceeds"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `read_bin` (the logging wrapper, not `read_bin_reported`) must log and
+    /// return empty on a genuine read failure, not panic or silently succeed.
+    #[test]
+    fn read_bin_wrapper_logs_and_returns_empty_on_error() {
+        let dir = test_scratch_dir("read_bin_wrapper_unreadable");
+        // A directory where a file was expected: EISDIR on read.
+        let as_dir = dir.join("blob.bin");
+        std::fs::create_dir_all(&as_dir).unwrap();
+        assert!(
+            super::read_bin(&as_dir).is_empty(),
+            "an unreadable blob must yield empty, not panic"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `parse_hex`: odd-length input drops the trailing unpaired nibble instead
+    /// of panicking or padding, and non-hex characters are filtered out before
+    /// pairing.
+    #[test]
+    fn parse_hex_handles_odd_length_and_non_hex_noise() {
+        assert_eq!(super::parse_hex("deadbeef"), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            super::parse_hex("abc"),
+            vec![0xab],
+            "a trailing unpaired hex digit must be dropped, not padded"
+        );
+        assert_eq!(
+            super::parse_hex("de:ad be-ef"),
+            vec![0xde, 0xad, 0xbe, 0xef],
+            "non-hex punctuation/whitespace must be filtered before pairing"
+        );
+        assert_eq!(super::parse_hex(""), Vec::<u8>::new());
+    }
+
     /// The other half of the overlap check: ranges that merely TOUCH
     /// (prev end == next start) are disjoint and must be KEPT, or a legitimate
     /// back-to-back capture would be wrongly discarded. Catches an over-strict

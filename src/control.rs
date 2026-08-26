@@ -732,6 +732,175 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `cmd_load` with an empty disc name must be refused with a usage error,
+    /// not fall through to `safe_disc_dir` with an empty string (which happens
+    /// to also reject it, but for the wrong reason and with the wrong message).
+    #[test]
+    fn cmd_load_rejects_empty_name() {
+        let (profile, state) = fixture_state();
+        let resp = cmd_load(&profile, &state, "");
+        assert_eq!(resp.lines, vec!["ERR usage: load <disc_name>".to_string()]);
+    }
+
+    /// A `sectors.bin` whose length is not a whole multiple of `SECTOR_SIZE`
+    /// (a truncated capture) must not panic or silently round up: the count is
+    /// truncated toward whole sectors and a diagnostic is logged. Also covers
+    /// the BDSM sparse-map branch, which sums range counts instead of dividing
+    /// the raw byte length.
+    #[test]
+    fn disc_sector_count_covers_flat_truncation_and_sparse_sum() {
+        let flat = crate::profile::DiscProfile {
+            toc: Vec::new(),
+            capacity: Vec::new(),
+            disc_info: Vec::new(),
+            disc_structures: std::collections::HashMap::new(),
+            sector_data: Vec::new(),
+            sectors: vec![0u8; SECTOR_SIZE * 2 + 100],
+            sector_map: Vec::new(),
+        };
+        assert_eq!(
+            disc_sector_count(&flat),
+            2,
+            "a non-multiple length must truncate toward whole sectors, not panic"
+        );
+
+        let sparse = crate::profile::DiscProfile {
+            toc: Vec::new(),
+            capacity: Vec::new(),
+            disc_info: Vec::new(),
+            disc_structures: std::collections::HashMap::new(),
+            sector_data: Vec::new(),
+            sectors: Vec::new(),
+            sector_map: vec![(0, 10, 0), (100, 5, 0)],
+        };
+        assert_eq!(
+            disc_sector_count(&sparse),
+            15,
+            "a BDSM sparse map must sum range counts, not divide the raw length"
+        );
+    }
+
+    /// An immediate EOF (a peer that connects and closes without writing
+    /// anything) must get no response at all — not the unknown-command error a
+    /// spurious empty-string parse would otherwise produce.
+    #[test]
+    fn empty_connection_gets_no_response() {
+        let resp = run_one(Vec::new());
+        assert!(
+            resp.is_empty(),
+            "an immediate EOF must get no response, got: {resp:?}"
+        );
+    }
+
+    /// `list-discs` must mark the currently loaded disc (and only it) with the
+    /// ` *` suffix. Nothing previously exercised the marker with more than one
+    /// candidate directory present.
+    #[test]
+    fn list_discs_marks_the_currently_loaded_disc() {
+        let dir = test_scratch_dir("ctl_list_marker");
+        std::fs::create_dir_all(dir.join("discs").join("alpha")).unwrap();
+        std::fs::create_dir_all(dir.join("discs").join("beta")).unwrap();
+        std::fs::write(
+            dir.join("discs").join("beta").join("sectors.bin"),
+            vec![0u8; SECTOR_SIZE],
+        )
+        .unwrap();
+
+        let (_profile, state) = fixture_state();
+        {
+            let mut st = lock_recover(&state);
+            st.profile_dir = dir.clone();
+            st.disc = DiscState::Loaded(Some("beta".to_string()));
+        }
+
+        let resp = cmd_list_discs(&state);
+        let body = resp.lines.join("\n");
+        assert!(
+            body.contains("beta * (sectors=true)"),
+            "the loaded disc must carry the marker: {body}"
+        );
+        assert!(
+            body.contains("alpha (sectors=false)"),
+            "a non-loaded disc must not carry the marker: {body}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Serializes the two tests below, the only ones in this crate that mutate
+    /// `XDG_RUNTIME_DIR` / `BDEMU_INSTANCE` — process-global state that would
+    /// otherwise race against each other under parallel test threads.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `start_listener` with no usable socket path (here: `XDG_RUNTIME_DIR`
+    /// unset) must log and return, not panic — it runs from the `STATE` `Lazy`
+    /// init ahead of the `extern "C" fn ioctl` catch_unwind, so a panic here
+    /// would unwind across the C boundary.
+    #[test]
+    fn start_listener_disabled_when_socket_path_unavailable() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_runtime = std::env::var("XDG_RUNTIME_DIR").ok();
+        unsafe {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+
+        let (profile, state) = fixture_state();
+        start_listener(profile, state);
+
+        unsafe {
+            match prev_runtime {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+    }
+
+    /// `start_listener` with a RESOLVABLE socket path (unlike the test above)
+    /// but a live peer already occupying it must hit the in-`start_listener`
+    /// `reclaim_socket_path` refusal (log + return) rather than trying to bind
+    /// — this is the `socket_path()` success arm the test above cannot reach.
+    /// Deliberately does not exercise the real bind/umask path below it: umask
+    /// is process-global, and toggling it here would race every other test's
+    /// concurrent file creation in the same process.
+    #[test]
+    fn start_listener_disabled_when_path_already_has_a_live_peer() {
+        let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_runtime = std::env::var("XDG_RUNTIME_DIR").ok();
+        let prev_instance = std::env::var(socket_name::INSTANCE_ENV).ok();
+
+        let dir = test_scratch_dir("ctl_live2");
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", &dir);
+            std::env::set_var(socket_name::INSTANCE_ENV, "cov2");
+        }
+
+        let path = socket_name::socket_path().expect("path must resolve");
+        // A live listener already occupying the resolved path, bound directly
+        // (not via start_listener) so this test never touches the umask.
+        let _live = UnixListener::bind(&path).expect("bind fixture listener");
+
+        let (profile, state) = fixture_state();
+        // Must log and return via reclaim_socket_path's refusal, not panic and
+        // not disturb the pre-existing listener.
+        start_listener(profile, state);
+        assert!(
+            UnixStream::connect(&path).is_ok(),
+            "the pre-existing live listener must be untouched"
+        );
+
+        unsafe {
+            match prev_runtime {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+            match prev_instance {
+                Some(v) => std::env::set_var(socket_name::INSTANCE_ENV, v),
+                None => std::env::remove_var(socket_name::INSTANCE_ENV),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `list-discs` writes directory names into a newline-delimited protocol that
     /// the CLI prints straight to a terminal, and profiles come from strangers.
     /// Catches the mutation that drops the sanitiser: an ESC in a disc directory
