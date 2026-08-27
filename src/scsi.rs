@@ -1,6 +1,4 @@
-// bdemu — Blu-ray Drive Emulator
-// MIT — freemkv project
-//
+// bdemu — Blu-ray Drive Emulator (MIT — freemkv project)
 // MMC-6 / SPC-4 compliant SCSI command handlers
 // Reference: MMC-6 (mmc6r02g.pdf), SPC-4, SBC-3
 
@@ -13,9 +11,8 @@ static CALL_NUM: AtomicU32 = AtomicU32::new(0);
 static LAST_SENSE: Mutex<[u8; 3]> = Mutex::new([0, 0, 0]); // sense_key, asc, ascq
 static MEDIA_CHANGED: AtomicBool = AtomicBool::new(false);
 // One-shot "new media has arrived" edge for GET EVENT STATUS NOTIFICATION.
-// MMC-6's NewMedia (0x02) is an edge event reported ONCE after a disc appears,
-// not a steady-state present indicator. Armed on a media change, cleared on the
-// first poll that reports it; subsequent polls report NoChange (0x00).
+// MMC-6's NewMedia (0x02) is an edge event reported ONCE, not steady-state
+// present; armed on media change, cleared after the first poll reports it.
 static NEW_MEDIA_EVENT: AtomicBool = AtomicBool::new(false);
 
 /// Called by the control socket to signal disc change.
@@ -86,10 +83,9 @@ fn lookup_unlock_signature(profile: &LoadedProfile, n: u32) -> [u8; 4] {
         })
         .unwrap_or_default();
 
-    // Build DriveId from the emulated drive's INQUIRY + firmware date. libfreemkv
-    // owns the INQUIRY parser (`from_inquiry`) and the Display used in the
-    // no-match log; freemkv-unlock's catalog takes its own raw `DriveId`, so map
-    // the four fields across (the two crates' DriveId are deliberately distinct).
+    // Build DriveId from INQUIRY + firmware date via libfreemkv's `from_inquiry`
+    // parser/Display; freemkv-unlock's catalog uses its own raw `DriveId`, so
+    // map the four fields across (the two crates' DriveId are deliberately distinct).
     let lf_drive_id = DriveId::from_inquiry(&profile.inquiry, &firmware_date);
     let drive_id = freemkv_unlock::DriveId {
         vendor_id: lf_drive_id.vendor_id.clone(),
@@ -152,17 +148,9 @@ pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
     let n = call();
     hdr.clear_status();
 
-    // Check for UNIT_ATTENTION (media changed) — delivered as a CHECK CONDITION
-    // on the first command after a media change.
-    //
-    // Per SPC, INQUIRY (0x12) must NOT clear a pending unit attention, and
-    // REQUEST SENSE (0x03) reports-then-clears its own sense (handled in
-    // cmd_request_sense) — so neither opcode may consume the MEDIA_CHANGED flag
-    // here. The opcode exclusion MUST be evaluated *before* the `swap`: `swap`
-    // is the left operand of `&&`, so writing it first makes it run
-    // unconditionally and silently clear the UA even for the exempt opcodes.
-    // Hosts probe with INQUIRY constantly right after a disc swap, so an
-    // unconditional swap consumes the UA before any real command can observe it.
+    // UNIT ATTENTION (media changed) fires as CHECK CONDITION on the first
+    // command after a change. INQUIRY/REQUEST SENSE are exempt from consuming
+    // it (SPC) — `swap` must stay the right operand of `&&`, else it runs first.
     let op = hdr.opcode();
     if op != 0x12 && op != 0x03 && MEDIA_CHANGED.swap(false, Ordering::SeqCst) {
         hdr.set_check_condition(0x06, 0x28, 0x00); // UNIT ATTENTION, MEDIUM MAY HAVE CHANGED
@@ -216,7 +204,6 @@ pub fn handle_scsi(hdr: &mut SgIoHdr, profile: &LoadedProfile) {
 
 // ============================================================================
 // 0x00 — TEST UNIT READY (SPC-4 §6.33)
-// ============================================================================
 // Returns GOOD if medium present and ready, NOT READY otherwise.
 
 fn cmd_test_unit_ready(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
@@ -233,7 +220,6 @@ fn cmd_test_unit_ready(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
 
 // ============================================================================
 // 0x03 — REQUEST SENSE (SPC-4 §6.27)
-// ============================================================================
 // Returns the last sense data. Always succeeds.
 
 fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
@@ -241,14 +227,9 @@ fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
     let mut sense = [0u8; 18];
     sense[0] = 0x70; // response code: current, fixed format
 
-    // A pending media-change UNIT ATTENTION must be reported-and-cleared here
-    // too, per SPC-4 §6.27. handle_scsi exempts REQUEST SENSE (0x03) from the
-    // UA-consuming swap so it never latches the UA into LAST_SENSE, which means
-    // a host probing with a bare REQUEST SENSE *before* any real command would
-    // otherwise see "no sense" while a UA is actually pending. Consume the flag
-    // and report the UA directly. (When a non-exempt command already consumed
-    // the flag, it latched 0x06/0x28/0x00 into LAST_SENSE, so the normal path
-    // below still reports it correctly — this only covers the bare-first case.)
+    // A pending media-change UNIT ATTENTION must be reported-and-cleared here too
+    // (SPC-4 §6.27): handle_scsi exempts REQUEST SENSE from the UA-consuming swap,
+    // so a bare REQUEST SENSE before any real command must consume/report it here.
     if MEDIA_CHANGED.swap(false, Ordering::SeqCst) {
         sense[2] = 0x06; // UNIT ATTENTION
         sense[7] = 10; // additional sense length
@@ -268,11 +249,9 @@ fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
         sense[7] = 10; // additional sense length
         sense[12] = last[1]; // ASC
         sense[13] = last[2]; // ASCQ
-        // Per SPC, REQUEST SENSE is read-and-clear: once latched sense has been
-        // reported it must be cleared. Otherwise commands that do not reset sense
-        // on success (INQUIRY, START_STOP_UNIT, PREVENT_ALLOW_REMOVAL,
-        // SET_CD_SPEED, WRITE_BUFFER, SEND_KEY) leave a prior error latched and a
-        // repeat REQUEST SENSE replays the stale error indefinitely.
+        // Per SPC, REQUEST SENSE is read-and-clear: once reported, latched sense
+        // must be cleared, or commands that don't reset sense on success (INQUIRY,
+        // START_STOP_UNIT, etc.) leave a stale error replayed indefinitely.
         *last = [0, 0, 0];
     }
     let len = std::cmp::min(alloc, 18);
@@ -282,9 +261,7 @@ fn cmd_request_sense(hdr: &mut SgIoHdr, n: u32) {
 
 // ============================================================================
 // 0x12 — INQUIRY (SPC-4 §6.4)
-// ============================================================================
-// Standard INQUIRY: return profile inquiry data.
-// VPD INQUIRY (EVPD=1): return vital product data pages.
+// Standard INQUIRY returns profile inquiry data; VPD (EVPD=1) returns VPD pages.
 
 fn cmd_inquiry(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let evpd = hdr.cdb(1) & 0x01;
@@ -341,13 +318,9 @@ fn cmd_inquiry(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     }
 }
 
-// ============================================================================
 // 0x1B — START STOP UNIT (SPC-4 §6.30, MMC-6 §6.37)
-// ============================================================================
-// Bit 0 of CDB[4]: START (1=start, 0=stop)
-// Bit 1 of CDB[4]: LOEJ (1=load/eject, 0=no)
-// START=0 LOEJ=1 = eject disc
-// START=1 LOEJ=1 = load disc
+// CDB[4] bit0=START (1=start,0=stop), bit1=LOEJ (1=load/eject,0=no):
+// START=0,LOEJ=1 -> eject; START=1,LOEJ=1 -> load.
 
 fn cmd_start_stop_unit(hdr: &mut SgIoHdr, _profile: &LoadedProfile, n: u32) {
     let start = hdr.cdb(4) & 0x01;
@@ -374,9 +347,7 @@ fn cmd_prevent_allow_removal(hdr: &mut SgIoHdr, n: u32) {
     log(n, &format!("PREVENT_ALLOW_REMOVAL prevent={}", prevent));
 }
 
-// ============================================================================
 // 0x25 — READ CAPACITY (SBC-3 §5.16)
-// ============================================================================
 // Returns last LBA and block size.
 
 fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
@@ -411,9 +382,7 @@ fn cmd_read_capacity(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     );
 }
 
-// ============================================================================
 // 0x28 — READ(10) (SBC-3 §5.8)
-// ============================================================================
 // Transfer LBA sectors to host.
 
 fn cmd_read_10(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
@@ -450,10 +419,8 @@ fn read_sectors(
         return;
     }
 
-    // `count` is an untrusted u32 straight from the CDB; READ(12) permits up to
-    // ~4 billion sectors, so `count * SECTOR_SIZE` is a multi-TB allocation
-    // that OOM-aborts the process. Clamp the allocation to the host's declared
-    // transfer length — we can never usefully return more than that anyway.
+    // `count` is untrusted (READ(12) allows ~4 billion sectors -> multi-TB alloc,
+    // OOM-aborting the process). Clamp to the host's declared transfer length.
     let total = (count as usize)
         .saturating_mul(SECTOR_SIZE)
         .min(hdr.dxfer_len as usize);
@@ -462,56 +429,26 @@ fn read_sectors(
     // so the clamp can never be over-indexed.
     let out_sectors = data.len() / SECTOR_SIZE;
 
-    // First LBA the fixture could not supply, if any.
-    //
-    // This is the difference between "the disc holds zeros here" and "bdemu has
-    // no idea what this sector holds", and it must NOT be answered the same way.
-    // All three branches below used to fall through to one `write_response`, so a
-    // missing/truncated/uncaptured sector was returned as 2048 zero bytes at GOOD
-    // status with a log line byte-identical to a real hit: an absent
-    // `discs/<n>/sectors.bin`, or a capture whose map does not cover the LBA the
-    // host asked for, looked exactly like genuine disc content. That is this
-    // project's worst defect class — a failure that presents as success — and it
-    // is how ~9 MB of ciphertext once shipped inside a movie at rc=0.
-    //
-    // The BDSM format already draws the line for us: the range table enumerates
-    // precisely which LBAs were captured, so a sector INSIDE a range is
-    // authoritative data (zeros there are the disc's own zeros, and are served as
-    // GOOD), while a sector outside every range was never read off the medium.
-    // For the legacy flat dump the file itself is the extent of what was
-    // captured, so past-the-end is the same "never read" case.
-    // Records the FIRST uncaptured LBA only: the whole command fails either way
-    // (fixed-format sense has no way to report a partial success), and the first
-    // one is the useful diagnostic. Held as u64 so a request whose LBA runs past
-    // u32::MAX (the sparse wrap case below) is LOGGED with its true value rather
-    // than a truncated-to-u32 one — the diagnostic must not itself substitute a
-    // low LBA where a high one was meant.
+    // First LBA the fixture could not supply, if any. Must NOT be silently
+    // zero-filled and returned at GOOD (this repo's worst defect class).
+    // u64 so an LBA past u32::MAX logs at its true value, not truncated.
     let mut missing: Option<u64> = None;
 
     if let Some(disc) = &profile.disc {
         if !disc.sector_map.is_empty() {
             // Sparse sector map: look up each requested sector
             for i in 0..out_sectors {
-                // Compute the target LBA in u64. `lba + i` can exceed the u32 LBA
-                // space when a host issues a read near the top of it (READ(12)
-                // with lba=0xFFFFFFFE, count=4 asks for two LBAs past u32::MAX).
-                // The previous `lba.wrapping_add(i as u32)` wrapped those back to
-                // LBAs 0/1 — sectors almost every capture covers — and served
-                // that low data at GOOD as if it were the requested high sectors:
-                // wrong bytes presented as success, this repo's flagship defect
-                // class. An LBA past u32::MAX cannot exist in a u32-keyed sector
-                // map, so treat it as a miss (CHECK CONDITION), exactly as the
-                // flat-dump sibling below treats a past-the-end LBA.
+                // `lba + i` in u64: near-top-of-range reads could otherwise wrap
+                // in u32 and serve wrong low-LBA data as the requested high
+                // sectors. Treat past-u32::MAX as a miss instead.
                 let target_lba64 = lba as u64 + i as u64;
                 if target_lba64 > u32::MAX as u64 {
                     missing = missing.or(Some(target_lba64));
                     continue;
                 }
                 let target_lba = target_lba64 as u32;
-                // Guard the source slice: a crafted/truncated sector map could
-                // point past the captured bytes. A range that claims a sector the
-                // file does not actually hold is a corrupt capture, not zeros —
-                // so it counts as missing too.
+                // Guard the source slice: a range claiming a sector the file
+                // doesn't actually hold is a corrupt capture, not zeros — miss.
                 match lookup_sector(&disc.sector_map, target_lba) {
                     Some(offset) if offset + SECTOR_SIZE <= disc.sectors.len() => {
                         let dst = i * SECTOR_SIZE;
@@ -525,10 +462,8 @@ fn read_sectors(
             // Legacy flat dump (LBA = byte offset / SECTOR_SIZE)
             let max_sectors = disc.sectors.len() / SECTOR_SIZE;
             for i in 0..out_sectors {
-                // Widen to u64 before adding so `lba + i` cannot overflow (the
-                // sparse path above widens the same way, and treats an LBA past
-                // u32::MAX as a miss). The bounds check below keeps the cast back
-                // to usize for indexing in range.
+                // Widen to u64 so `lba + i` cannot overflow, same as the sparse
+                // path above (an LBA past u32::MAX is a miss, not a wraparound).
                 let sector_lba = lba as u64 + i as u64;
                 if sector_lba < max_sectors as u64 {
                     let src_start = sector_lba as usize * SECTOR_SIZE;
@@ -539,16 +474,9 @@ fn read_sectors(
                 }
             }
         } else if !disc.sector_data.is_empty() {
-            // Single-pattern fixture: every LBA is deliberately the same 2048-byte
-            // sector. But a sector_data.bin SHORTER than one sector is a truncated
-            // capture, not a disc whose sector legitimately ends early — the old
-            // code copied the short bytes and left the rest of every sector as the
-            // zero-initialised buffer, returning 2048 real-plus-zero bytes at GOOD
-            // with a log line identical to a genuine hit. That is this repo's
-            // flagship "failure that looks like success" class, in the one read
-            // branch the round-1 fix did not touch. Refuse the short case as a
-            // miss (CHECK CONDITION, via the shared `missing` path below), and
-            // only serve the pattern when it is a whole sector.
+            // Single-pattern fixture: every LBA is the same 2048-byte sector.
+            // A sector_data.bin shorter than one sector is a truncated capture,
+            // not a legitimately short sector — treat it as a miss, not padding.
             if disc.sector_data.len() < SECTOR_SIZE {
                 missing = Some(u64::from(lba));
             } else {
@@ -566,15 +494,9 @@ fn read_sectors(
     }
 
     if let Some(bad_lba) = missing {
-        // MEDIUM ERROR / UNRECOVERED READ ERROR. Deliberately not ILLEGAL REQUEST
-        // / LOGICAL BLOCK ADDRESS OUT OF RANGE (0x05/0x21): that tells the host
-        // its CDB was wrong, inviting it to blame the request rather than the
-        // fixture, and the LBA is usually perfectly valid on the real medium —
-        // it is bdemu that cannot recover the data. A host seeing 0x03/0x11
-        // behaves as it would against a real drive that failed to read a sector:
-        // it retries, degrades, or fails the rip. All of those beat accepting
-        // zeros as content. Uses the same set_check_condition + save_sense seam
-        // as every other error path in this file, so REQUEST SENSE reports it.
+        // MEDIUM ERROR / UNRECOVERED READ ERROR (0x03/0x11), not ILLEGAL REQUEST:
+        // the LBA is valid, bdemu just can't recover the data — makes the host
+        // retry/degrade/fail like against a real drive, instead of taking zeros.
         hdr.set_check_condition(0x03, 0x11, 0x00);
         save_sense(0x03, 0x11, 0x00);
         log_lazy(n, || {
@@ -630,31 +552,13 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
     );
 }
 
-// ============================================================================
 // 0x3C — READ BUFFER (SPC-4 §6.7)
-// ============================================================================
-// Implemented modes:
-//   Mode 2: data — vendor-specific buffer data, served from the profile
-//   Mode 3: descriptor — buffer capacity info
-//   Mode 6: vendor-specific (MTK register read) — a DELIBERATE empty-GOOD (see
-//           the mode-6 arm below); the drive returns status GOOD with no data.
-//   plus the unlock-handshake CDB shapes, recognised before the match below.
-//
-// Mode 0 (combined header + data) is NOT implemented, and the header comment
-// that claimed it was is corrected here rather than the mode being added: a
-// profile has no mode-0 payload to serve (SCHEMA.md's `read_buffer` map is
-// documented as "Only for mode 2 (vendor data)"), so implementing it would mean
-// inventing a descriptor + buffer bdemu never captured from the real drive — a
-// synthesised answer indistinguishable from a real one, which is precisely the
-// failure-that-looks-like-success class this project treats as its worst.
-// Every unimplemented mode therefore answers ILLEGAL REQUEST / INVALID FIELD IN
-// CDB, matching the mode-2-not-in-profile path below and the unhandled-opcode
-// arm in handle_scsi (which already chose ILLEGAL REQUEST over an empty GOOD for
-// the same reason).
+// Implements modes 2 (data), 3 (descriptor), 6 (vendor MTK reg, empty-GOOD),
+// plus unlock shapes. Mode 0 deliberately NOT implemented (no captured payload).
 
 /// Allocation size for the READ_BUFFER unlock response: the host-requested
 /// `dxfer_len` clamped to 64 bytes. `dxfer_len` is an untrusted u32 from the
-/// CDB; the unlock reply only populates bytes [0:4] and [12:16], so 64 is
+/// CDB; the unlock reply only populates bytes \[0:4\] and \[12:16\], so 64 is
 /// ample and a hostile huge length can never drive an OOM allocation here.
 fn unlock_resp_len(dxfer_len: u32) -> usize {
     (dxfer_len as usize).min(64)
@@ -672,12 +576,9 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         // Look up drive signature from libfreemkv bundled profiles.
         // Match the emulated drive's INQUIRY fields against the profile database.
         let sig = lookup_unlock_signature(profile, n);
-        // `dxfer_len` is an untrusted u32 straight from the host CDB, so
-        // `vec![0u8; dxfer_len]` is an unbounded (multi-GB) allocation that
-        // OOM-aborts the emulator. The unlock response only ever populates
-        // bytes [0:4] (signature) and [12:16] (marker), so 64 bytes is ample;
-        // clamp the allocation the same way read_sectors does (`.min(...)`).
-        // write_response truncates the copy to the host's dxfer_len anyway.
+        // `dxfer_len` is untrusted; an unclamped alloc could OOM-abort the
+        // emulator. The response only ever populates [0:4] and [12:16], so
+        // clamp to 64 bytes (write_response truncates to dxfer_len anyway).
         let mut resp = vec![0u8; unlock_resp_len(hdr.dxfer_len)];
         if resp.len() >= 16 {
             // Signature at [0:4] from profile database
@@ -729,20 +630,9 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 ),
             );
         }
-        // Mode 6: Vendor-specific (MTK register read).
-        //
-        // This empty-GOOD is the pre-existing, DELIBERATE behavior for mode 6 (it
-        // predates round 2, which only documents and pins it — it is not a new
-        // decision), and is intentionally carved out of the "empty GOOD is a lie
-        // the host can't detect" policy the catch-all arm below applies to every
-        // OTHER unimplemented mode. The distinction: mode 6 is part of the
-        // vendor unlock/register-read flow the unlocker drives, where a bare GOOD
-        // is the expected answer, whereas the catch-all covers modes bdemu simply
-        // does not implement. The pin (read_buffer_mode6_is_deliberate_empty_good)
-        // exists so this carve-out is not mistaken for an oversight and silently
-        // "fixed" into an ILLEGAL REQUEST; if the empty-GOOD is ever shown to be
-        // wrong, changing it is a deliberate act that updates the test, not an
-        // accident.
+        // Mode 6: Vendor-specific (MTK register read). Empty-GOOD is DELIBERATE
+        // (unlocker's register-read flow, not an unimplemented mode) — pinned by
+        // read_buffer_mode6_is_deliberate_empty_good so it isn't "fixed" away.
         6 => {
             hdr.write_response(&[]);
             log(
@@ -753,11 +643,9 @@ fn cmd_read_buffer(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
                 ),
             );
         }
-        // Every other mode (including mode 0) is unimplemented. An empty GOOD
-        // response here told the host "this buffer is legitimately zero bytes
-        // long", which is a lie the host cannot detect; ILLEGAL REQUEST /
-        // INVALID FIELD IN CDB says what is actually true — bdemu does not
-        // implement this mode.
+        // Every other mode (including mode 0) is unimplemented. Empty-GOOD would
+        // lie ("buffer is legitimately zero bytes"); ILLEGAL REQUEST says the
+        // truth — bdemu does not implement this mode.
         _ => {
             hdr.set_check_condition(0x05, 0x24, 0x00);
             save_sense(0x05, 0x24, 0x00);
@@ -804,26 +692,9 @@ fn cmd_read_toc(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     log(n, &format!("READ_TOC ({} bytes) default", hdr.dxfer_len));
 }
 
-// ============================================================================
 // 0x46 — GET CONFIGURATION (MMC-6 §6.6)
-// ============================================================================
-// CDB[1] bits 0-1: RT (requested type)
-//   0 = all features starting from Starting Feature Number
-//   1 = current features starting from Starting Feature Number
-//   2 = single feature identified by Starting Feature Number
-// CDB[2-3]: Starting Feature Number (big-endian)
-// CDB[7-8]: Allocation Length (big-endian)
-//
-// Response header (8 bytes):
-//   [0-3] Data Length (excluding these 4 bytes)
-//   [4-5] Reserved
-//   [6-7] Current Profile
-//
-// Feature Descriptor:
-//   [0-1] Feature Code
-//   [2]   Version[7:2] | Persistent[1] | Current[0]
-//   [3]   Additional Length
-//   [4+]  Feature-specific data
+// CDB[1] bits0-1 RT: 0=all features, 1=current only, 2=single (CDB[2-3]).
+// Response: 8-byte header (Data Length, Current Profile) + Feature Descriptors.
 
 fn cmd_get_configuration(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let rt = hdr.cdb(1) & 0x03;
@@ -857,11 +728,9 @@ fn cmd_get_configuration(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         }
         // RT=0 or RT=1: return features starting from 'feat'
         _ => {
-            // MMC-6 §6.6 requires Feature Descriptors in ascending Feature Code
-            // order. profile.features is sorted by code at load time (load_dir
-            // and load_json both call `features.sort_by_key`), so iterating the
-            // Vec already emits ascending order; assert the invariant so a future
-            // change to the loader can't silently regress a strict host's walk.
+            // MMC-6 §6.6 requires ascending Feature Code order; profile.features
+            // is sorted at load time, so iteration already satisfies this.
+            // Assert the invariant so a future loader change can't regress it.
             debug_assert!(
                 profile.features.windows(2).all(|w| w[0].0 <= w[1].0),
                 "profile.features must be sorted ascending by feature code (MMC-6 §6.6)"
@@ -901,15 +770,9 @@ fn cmd_get_configuration(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     }
 }
 
-// ============================================================================
 // 0x4A — GET EVENT STATUS NOTIFICATION (MMC-6 §6.5)
-// ============================================================================
-// Polled mode: host polls for media events.
-// CDB[1] bit 0: Polled (1=polled, 0=async — async not supported)
-// CDB[4]: Notification Class Request bitmap
-//   bit 4: Media event
-//   bit 2: Power Management
-//   bit 1: Operational Change
+// Polled mode only (CDB[1] bit0; async unsupported). CDB[4] class bitmap:
+// bit4=Media event, bit2=Power Management, bit1=Operational Change.
 
 fn cmd_get_event_status(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let polled = hdr.cdb(1) & 0x01;
@@ -932,11 +795,9 @@ fn cmd_get_event_status(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
         resp[3] = 0x10; // supported classes = media
 
         if profile.has_disc() {
-            // NewMedia (0x02) is an edge event ("a disc just arrived"), not a
-            // steady-state present indicator. Report it ONCE on the first poll
-            // after insertion, then NoChange (0x00) thereafter — returning it on
-            // every poll makes hosts re-enumerate (READ_DISC_INFO / READ_TOC /
-            // GET_CONFIGURATION) on each poll, risking re-mount loops.
+            // NewMedia (0x02) is an edge event, not steady-state: report it ONCE
+            // on the first poll after insertion, then NoChange — repeating it
+            // makes hosts re-enumerate on every poll, risking re-mount loops.
             if NEW_MEDIA_EVENT.swap(false, Ordering::SeqCst) {
                 resp[4] = 0x02; // event code: NewMedia (edge, one-shot)
             } else {
@@ -1009,21 +870,15 @@ fn cmd_read_disc_info(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     );
 }
 
-// ============================================================================
 // 0x5A — MODE SENSE(10) (SPC-4 §6.11)
-// ============================================================================
-// CDB[2] bits 5-0: Page Code
-// CDB[2] bits 7-6: PC (page control)
-//
-// Response: Mode Parameter Header(8) + Block Descriptor(s) + Mode Page(s)
+// CDB[2] bits5-0=Page Code, bits7-6=PC (page control). Response: Mode
+// Parameter Header(8) + Block Descriptor(s) + Mode Page(s).
 
 fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let page = hdr.cdb(2) & 0x3F;
-    // PC (page control): 0=current, 1=changeable mask, 2=default, 3=saved.
-    // This emulator only models PC=0 (current values); SPC-4 says PC=1 should
-    // return a changeable-fields bitmask, but the rip path never issues it.
-    // Rather than silently treating PC=1/2/3 as current values, surface that
-    // only PC=0 is emulated in the trace so an unexpected PC is diagnosable.
+    // PC (page control): only PC=0 (current) is modeled — the rip path never
+    // issues PC=1/2/3. Surface non-zero PC in the trace so it's diagnosable
+    // rather than silently treated as current values.
     let pc = (hdr.cdb(2) >> 6) & 0x03;
     if pc != 0 {
         log(
@@ -1080,9 +935,7 @@ fn cmd_mode_sense(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     }
 }
 
-// ============================================================================
 // 0xA3 — SEND KEY (MMC-6 §6.31)
-// ============================================================================
 // AACS authentication — just acknowledge for now
 
 fn cmd_send_key(hdr: &mut SgIoHdr, n: u32) {
@@ -1097,12 +950,8 @@ fn cmd_send_key(hdr: &mut SgIoHdr, n: u32) {
     );
 }
 
-// ============================================================================
 // 0xA4 — REPORT KEY (MMC-6 §6.25)
-// ============================================================================
-// Key class 0x00: DVD CSS/CPPM
-// Key class 0x02: AACS
-// Key class 0x08: RPC state
+// Key class 0x00: DVD CSS/CPPM, 0x02: AACS, 0x08: RPC state
 
 fn cmd_report_key(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     let key_class = hdr.cdb(7);
@@ -1120,12 +969,9 @@ fn cmd_report_key(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
             log(n, "REPORT_KEY RPC state");
         }
         _ => {
-            // MMC-6 §6.25: an unsupported key class/format must be CHECK
-            // CONDITION / ILLEGAL REQUEST / INVALID FIELD IN CDB, not a
-            // successful zero-byte exchange — otherwise an AACS (class 0x02)
-            // probe reads a bogus GOOD result instead of an error. Matches the
-            // unsupported-VPD-page (cmd_inquiry) and unsupported-mode-page
-            // (cmd_mode_sense) patterns.
+            // MMC-6 §6.25: unsupported key class/format must be ILLEGAL REQUEST,
+            // not a successful zero-byte exchange — else an AACS probe reads a
+            // bogus GOOD. Matches the unsupported-VPD-page / mode-page patterns.
             hdr.set_check_condition(0x05, 0x24, 0x00);
             save_sense(0x05, 0x24, 0x00);
             log(
@@ -1139,9 +985,7 @@ fn cmd_report_key(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     }
 }
 
-// ============================================================================
 // 0xAD — READ DISC STRUCTURE (MMC-6 §6.23)
-// ============================================================================
 // Returns disc physical format information, DI, BCA, etc.
 
 fn cmd_read_disc_structure(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
@@ -1180,9 +1024,7 @@ fn cmd_read_disc_structure(hdr: &mut SgIoHdr, profile: &LoadedProfile, n: u32) {
     );
 }
 
-// ============================================================================
 // 0xBB — SET CD SPEED (MMC-6 §6.29)
-// ============================================================================
 // Pioneer uses this for speed control via vendor extension
 
 fn cmd_set_cd_speed(hdr: &mut SgIoHdr, n: u32) {
@@ -1948,12 +1790,9 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
     // Opcode dispatch coverage — one command per handler through handle_scsi,
-    // asserting SCSI status and the load-bearing response bytes. All lock
-    // TEST_GUARD and clear MEDIA_CHANGED so a stray UNIT ATTENTION from a
-    // concurrent test can never pre-empt the handler under test.
-    // ------------------------------------------------------------------
+    // asserting status and response bytes. All lock TEST_GUARD and clear
+    // MEDIA_CHANGED so a stray UNIT ATTENTION can't pre-empt the handler.
 
     /// Lock the global SCSI state and clear MEDIA_CHANGED for a handler test.
     fn guard() -> std::sync::MutexGuard<'static, ()> {

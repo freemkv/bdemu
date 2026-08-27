@@ -1,16 +1,12 @@
-// bdemu — Blu-ray Drive Emulator CLI
-// MIT — freemkv project
-//
-// Usage:
-//   bdemu capture-disc /dev/sg4 profiles/bu40n/discs/my_disc/
-//   bdemu validate profiles/bu40n/
+// bdemu — Blu-ray Drive Emulator CLI (MIT, freemkv project)
+// Usage: bdemu capture-disc /dev/sg4 profiles/bu40n/discs/my_disc/
+//        bdemu validate profiles/bu40n/
 
 mod capture;
 
-// The library is a cdylib and cannot be linked as an rlib, so the binary cannot
-// import from it. Pull the shared control-socket path policy in directly via
-// #[path] so the connect side here matches the emulator's bind side (control.rs
-// includes the same file).
+// cdylib can't be linked as an rlib, so pull the shared control-socket path
+// policy in via #[path] instead, keeping this connect side in sync with the
+// emulator's bind side (control.rs includes the same file).
 #[path = "socket_name.rs"]
 mod socket_name;
 use socket_name::socket_path;
@@ -72,18 +68,15 @@ fn main() {
             }
 
             // Find libbdemu.so next to the bdemu binary. A failed current_exe()
-            // previously coerced to an empty path, so the library was looked up
-            // relative to "." and the resulting "not found" error pointed at the
-            // wrong place; surface the real cause instead.
+            // used to coerce to "." and mislead the "not found" error; surface
+            // the real cause instead.
             let exe = std::env::current_exe().unwrap_or_else(|e| {
                 eprintln!("Error: could not determine bdemu binary location: {}", e);
                 std::process::exit(1);
             });
-            // A `.` fallback here would silently reintroduce the CWD lookup the
-            // comment above says was fixed (libbdemu.so resolved against the
-            // current dir, not the binary's dir). current_exe() returns an
-            // absolute path on every real platform so this is practically
-            // unreachable, but error out explicitly rather than fall back.
+            // A `.` fallback would reintroduce the CWD lookup bug fixed above.
+            // current_exe() is absolute on every real platform so this is
+            // practically unreachable, but fail explicitly rather than fall back.
             let exe_dir = exe.parent().unwrap_or_else(|| {
                 eprintln!(
                     "Error: bdemu binary path has no parent directory: {}",
@@ -162,10 +155,8 @@ fn main() {
                 eprintln!("Usage: bdemu load <disc_name>");
                 std::process::exit(1);
             }
-            // The control protocol is newline-delimited. A name containing a
-            // control character (notably \n / \r) would be silently truncated on
-            // the wire (or smuggle a second command), so the loaded disc would
-            // not match what the user typed. Reject such names up front.
+            // Protocol is newline-delimited: a \n/\r in the name would truncate
+            // on the wire or smuggle a second command. Reject up front.
             if let Some(bad) = args[2].chars().find(|c| c.is_control()) {
                 eprintln!(
                     "Error: disc name contains an illegal control character (U+{:04X})",
@@ -173,11 +164,9 @@ fn main() {
                 );
                 std::process::exit(1);
             }
-            // `load` is the one slow verb: the emulator's control handler does a
-            // full synchronous `fs::read` of sectors.bin (up to 16 GiB, multi-GB
-            // typical for BD/UHD, far slower on NFS) before replying. A short read
-            // timeout would fire mid-load and spuriously fail a successful rip, so
-            // request the generous read timeout for this command only.
+            // `load` is the slow verb: the emulator does a full synchronous
+            // fs::read of sectors.bin (up to 16 GiB) before replying. A short
+            // timeout would fire mid-load, so request the generous one here.
             send_control(&format!("load {}", args[2]), true);
         }
         "list-discs" => send_control("list-discs", false),
@@ -382,14 +371,9 @@ fn validate_profile(dir: &str) -> bool {
         // metadata-then-read split previously raced: a truncation between the
         // size check and the read left an empty Vec, and &data[8..16] panicked.
         Ok(data) if data.len() == 96 => {
-            // INQUIRY strings come out of a profile a stranger produced (SCHEMA.md
-            // documents sharing profiles through GitHub issues, and
-            // profile-from-issue.yml turns an issue body into one of these
-            // directories). `.trim()` removes spaces, not ESC: a product string of
-            // "BDR\x1b[2J" would clear the operator's terminal, and CSI/OSC
-            // sequences can scroll the MISSING lines of this very report out of
-            // sight. Sanitise before printing — the same `char::is_control` class
-            // the `load` handler above refuses on the input side.
+            // INQUIRY strings come from profiles shared by strangers (GitHub
+            // issues, per SCHEMA.md). `.trim()` strips spaces, not ESC, so a
+            // product string like "BDR\x1b[2J" could clear the terminal.
             let vendor = std::str::from_utf8(&data[8..16]).unwrap_or("?").trim();
             let product = std::str::from_utf8(&data[16..32]).unwrap_or("?").trim();
             println!(
@@ -409,11 +393,9 @@ fn validate_profile(dir: &str) -> bool {
         }
     }
 
-    // Check key features. The `annotated` bool is the single source of truth for
-    // "decode this feature's payload into a date/serial annotation" — branch on
-    // it below instead of re-listing the magic feature codes (which would drift
-    // from this slice if a code were added/changed in one place but not the
-    // other).
+    // Check key features. `annotated` is the single source of truth for whether
+    // to decode a feature's payload into a date/serial annotation — branch on it
+    // below instead of re-listing magic codes, which could drift from this slice.
     let features: &[(&str, u16, &str, bool)] = &[
         ("gc_0000.bin", 0x0000, "Profile List", false),
         ("gc_0108.bin", 0x0108, "Serial Number", true),
@@ -422,12 +404,9 @@ fn validate_profile(dir: &str) -> bool {
     for (file, code, name, annotated) in features {
         let fp = p.join(file);
         if fp.exists() {
-            // exists() alone is not "present and usable". A zero-byte blob (an
-            // interrupted capture write) or one whose metadata cannot be read is
-            // a BROKEN required feature, not a passing one — printing ✓ for it is
-            // the same fake-success the read_dir arm below was hardened against,
-            // and it diverges from the disc-blob check's Empty/Unreadable states.
-            // Fail it loudly instead.
+            // exists() alone is not "present and usable": a zero-byte blob
+            // (interrupted capture write) or unreadable metadata is a BROKEN
+            // required feature, not a pass — fail it loudly instead.
             match std::fs::metadata(&fp).map(|m| m.len()) {
                 Ok(0) => {
                     println!("  ✗ {} (0x{:04X} {}) EMPTY", file, code, name);
@@ -538,10 +517,8 @@ fn validate_profile(dir: &str) -> bool {
                             sectors.describe()
                         );
                         // A zero-byte blob is an interrupted capture, not an
-                        // absent one: the file exists, so the old `.exists()`
-                        // check printed `sectors=true` and `validate` exited 0
-                        // while the emulator would serve nothing at all from it.
-                        // Fail the profile instead.
+                        // absent one; the old `.exists()` check printed
+                        // `sectors=true` and exited 0 despite serving nothing.
                         if toc.is_broken() || sectors.is_broken() {
                             ok = false;
                         }
@@ -593,10 +570,9 @@ fn send_control(cmd: &str, slow_read: bool) {
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
         Err(e) => {
-            // Surface the OS error so the distinct failure modes are
-            // distinguishable: ENOENT (no emulator) vs EACCES (permissions) vs
-            // ECONNREFUSED (stale socket). Matches the error-surfacing pattern
-            // used elsewhere in this file (current_exe, writeln, etc.).
+            // Surface the OS error so ENOENT (no emulator), EACCES (permissions),
+            // and ECONNREFUSED (stale socket) stay distinguishable, matching the
+            // error-surfacing pattern used elsewhere in this file.
             eprintln!("Cannot connect to bdemu ({}). Is the emulator running?", e);
             eprintln!("Start with: bdemu run --profile <dir> -- <command>");
             std::process::exit(1);
@@ -604,10 +580,8 @@ fn send_control(cmd: &str, slow_read: bool) {
     };
 
     // Bound the write before sending: a backpressured emulator (e.g. blocked
-    // draining its recv buffer during a prior multi-GB disc read) can fill the
-    // kernel send buffer and wedge writeln! indefinitely. Surface a failure to
-    // arm the timeout rather than swallowing it, consistent with the connect/
-    // writeln error-surfacing in this function.
+    // draining a prior multi-GB disc read) can fill the kernel send buffer and
+    // wedge writeln! indefinitely, so arm a timeout rather than risk that.
     if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
         eprintln!("Failed to set bdemu write timeout: {}", e);
         std::process::exit(1);
@@ -621,14 +595,9 @@ fn send_control(cmd: &str, slow_read: bool) {
         std::process::exit(1);
     }
 
-    // Bound the read: a hung emulator (connected but never replies) would
-    // otherwise stall the CLI forever. On timeout the read errors out before the
-    // terminator arrives, so the loop below leaves `terminated` false and
-    // classify_response reports Truncated → the CLI exits non-zero rather than
-    // acting on a partial reply. `load` is the exception: it can legitimately take
-    // many minutes (multi-GB synchronous sectors.bin read on the emulator, slower
-    // still on NFS), so it gets a 30-min ceiling that still bounds a truly dead
-    // emulator. Fast commands keep the tight 5s timeout.
+    // Bound the read: a hung emulator would otherwise stall the CLI forever.
+    // `load` gets a 30-min ceiling (multi-GB read can legitimately take that
+    // long); other commands keep the tight 5s timeout to fail fast instead.
     let read_timeout = if slow_read {
         Duration::from_secs(1800)
     } else {
@@ -640,11 +609,8 @@ fn send_control(cmd: &str, slow_read: bool) {
     }
 
     // Read the reply line by line, stopping at the terminator sentinel. A read
-    // error (notably a timeout) or EOF before the terminator arrives means the
-    // response was cut short — `terminated` stays false and the CLI fails loudly
-    // rather than acting on a partial reply (the old
-    // `lines().map_while(Result::ok).collect()` silently dropped the tail, so a
-    // truncated `list-discs` printed clean and exited 0).
+    // error or EOF before the terminator leaves `terminated` false so the CLI
+    // fails loudly, unlike the old map_while(Result::ok) which dropped the tail.
     let reader = BufReader::new(&stream);
     let mut lines: Vec<String> = Vec::new();
     let mut terminated = false;

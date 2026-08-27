@@ -1,26 +1,6 @@
-// bdemu — Terminal-output sanitiser, shared between the cdylib (control.rs)
-// and the CLI binary (bin.rs).
-//
-// Drive profiles are THIRD-PARTY UNTRUSTED ARTIFACTS: SCHEMA.md documents
-// sharing them through GitHub issues and .github/workflows/profile-from-issue.yml
-// turns an issue body into a profile directory. Every string bdemu decodes out of
-// a profile — the INQUIRY vendor/product strings, the GET_CONFIGURATION serial
-// and firmware date, the names of the directories under discs/ — therefore comes
-// from a stranger, and `bdemu validate` / `bdemu list-discs` print those strings
-// straight to a terminal.
-//
-// A `.trim()` does not remove ESC (U+001B): a profile whose product string is
-// "BDR\x1b[2J\x1b]0;pwned\x07" clears the operator's screen and rewrites their
-// window title, and CSI sequences can hide the rest of the validate report (so a
-// MISSING line scrolls away unseen — the "failure that looks like success" class
-// this project cares about most). The input side already refuses control
-// characters outright at bin.rs's `load` handler using `char::is_control`; this
-// is the same predicate applied on the output side, where refusing is not an
-// option because we still want to *show* the operator what the profile claims.
-//
-// The library is a `cdylib` and cannot be linked as an rlib, so both sides pull
-// this file in via `#[path = "sanitize.rs"]` — the same mechanism socket_name.rs
-// already uses for the control-socket path policy.
+// bdemu — Terminal-output sanitiser, shared via `#[path = "sanitize.rs"]`
+// between the cdylib and CLI. Drive profiles are untrusted (GitHub-issue-
+// sourced); `.trim()` alone won't stop ESC sequences hiding a MISSING line.
 
 /// Replacement for a control character. A visible, non-ambiguous placeholder is
 /// better than deletion: deleting would let "PIONE\x08\x08\x08ACME" render as a

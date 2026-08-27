@@ -1,6 +1,4 @@
-// bdemu — Blu-ray Drive Emulator
-// MIT — freemkv project
-//
+// bdemu — Blu-ray Drive Emulator — MIT — freemkv project
 // Drive profile loader — directory-based with .bin files + TOML metadata
 
 use std::collections::HashMap;
@@ -47,27 +45,15 @@ pub struct DiscProfile {
 /// If magic is NOT "BDSM", the file is a flat sector dump (legacy, LBA = offset/2048).
 pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
     if data.len() >= 12 && &data[0..4] == b"BDSM" {
-        // Every corrupt/hostile bail-out inside this block returns EMPTY sectors
-        // (`(Vec::new(), Vec::new())`), NOT `(data, Vec::new())`.
-        //
-        // The temptation is to "fall back to flat" by keeping `data` — but this
-        // file already matched the BDSM magic, so it is NOT a legacy flat dump:
-        // its first bytes are the "BDSM" magic + version + range table, not sector
-        // 0. Serving them as a flat dump would hand the host that header AS sector
-        // 0 content at GOOD status — the exact "wrong data presented as success"
-        // class this repo treats as its worst. Once a file claims to be BDSM, a
-        // parse failure means we cannot serve ANY sector from it: return empty so
-        // the READ handler answers every sector with CHECK CONDITION (an honest
-        // miss) instead. The genuine legacy-flat path is the `else` branch below,
-        // reached only when the magic is absent.
+        // Every corrupt/hostile bail-out here returns EMPTY sectors, never `(data,
+        // Vec::new())`: the header/range table isn't sector 0, so falling back to
+        // "flat" would serve that header as sector 0 at GOOD status.
         let _version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         let num_ranges = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
 
-        // `num_ranges` is untrusted file data: a value like 0xFFFFFFFF would
-        // make `with_capacity` request a multi-GB allocation that aborts the
-        // process, and `12 + num_ranges*8` would overflow. The file cannot
-        // describe more ranges than its own bytes allow (8 bytes each after
-        // the 12-byte header), so clamp to that bound first.
+        // `num_ranges` is untrusted: a value like 0xFFFFFFFF would make
+        // `with_capacity` OOM-abort and `12 + num_ranges*8` overflow. Clamp to
+        // what the file's own byte length can actually describe (8B/range).
         let max_ranges = data.len().saturating_sub(12) / 8;
         if num_ranges > max_ranges {
             return (Vec::new(), Vec::new()); // corrupt/hostile: serve nothing
@@ -89,11 +75,9 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
             let count =
                 u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
 
-            // The declared sector bytes for this range must actually exist in
-            // `data`; otherwise lookup_sector + the READ handler would slice
-            // out of bounds and panic mid-session. Bail (serving nothing, per the
-            // block comment above) on overflow or truncation rather than building
-            // a poisoned map.
+            // The declared sector bytes must actually exist in `data`, or
+            // lookup_sector/READ would slice out of bounds and panic. Bail
+            // (serve nothing, per above) on overflow or truncation instead.
             let span = match (count as usize).checked_mul(SECTOR_SIZE) {
                 Some(s) => s,
                 None => return (Vec::new(), Vec::new()),
@@ -107,33 +91,14 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
             data_offset = next_offset;
         }
 
-        // lookup_sector (scsi.rs) binary-searches this map and so REQUIRES it to
-        // be sorted ascending by start_lba. The byte_offset stored per range is
-        // computed above from file order, so sorting the (start_lba, count,
-        // byte_offset) tuples by start_lba reorders the search keys without
-        // disturbing where each range's bytes live. A capture tool that emits
-        // ranges in non-ascending LBA order would otherwise make binary_search
-        // return Err for sectors that ARE present, silently zero-filling them
-        // (data corruption in the emulated disc). Matches the features-list sort
-        // precedent in load_dir/load_json.
+        // lookup_sector (scsi.rs) binary-searches this map, requiring ascending
+        // start_lba order. Without this sort, out-of-order ranges from a capture
+        // tool would make binary_search miss present sectors and zero-fill them.
         map.sort_by_key(|&(start, _, _)| start);
 
-        // Reject OVERLAPPING ranges. lookup_sector (scsi.rs) binary-searches this
-        // map assuming the ranges are DISJOINT: it returns whichever range the
-        // search happens to land on. If two ranges cover the same LBA — an
-        // authoring bug, or a hostile profile crafted to do so — that resolution
-        // is arbitrary, so a given LBA could serve the WRONG range's bytes as
-        // authoritative GOOD (this repo's flagship "wrong data presented as
-        // success" class). Sorting alone does not prevent that. Walk the sorted
-        // map and, if any range starts before its predecessor ends, treat the
-        // whole file as corrupt and serve NOTHING (empty sectors + empty map, per
-        // the block comment above) so every read misses — the same bail-out the
-        // truncation/overflow guards use. A file reaching this point already
-        // parsed as a fully-structured BDSM (magic, version, in-bounds ranges), so
-        // it cannot be a coincidental flat dump; discarding its bytes is
-        // unambiguously right here. Ranges that merely TOUCH (prev end == next
-        // start) are disjoint and kept. `end` is computed in u64 so a range near
-        // u32::MAX cannot wrap and hide an overlap.
+        // Reject OVERLAPPING ranges: lookup_sector assumes DISJOINT ranges, so an
+        // overlap (bug or hostile profile) could serve the WRONG range as GOOD.
+        // Bail to empty on overlap (touching is OK; `end` uses u64 to avoid wrap).
         for w in map.windows(2) {
             let (start_prev, count_prev, _) = w[0];
             let (start_next, _, _) = w[1];
@@ -225,11 +190,9 @@ impl LoadedProfile {
                         }
                     }
                     "features" => {
-                        // A malformed key must NOT fall back to 0x0000: that is
-                        // the real MMC Profile List feature code, so a typo'd
-                        // key coerced to 0 would silently overwrite legitimate
-                        // Profile List data. Skip it with a warning instead,
-                        // mirroring the current_profile handling above.
+                        // A malformed key must NOT fall back to 0x0000 (the real
+                        // Profile List feature code) or it would silently
+                        // overwrite legitimate data. Skip with a warning instead.
                         match parse_u16_opt(key) {
                             Some(code) => feature_files.push((code, val.to_string())),
                             None => eprintln!("bdemu: invalid feature code '{}', skipping", key),
@@ -237,10 +200,8 @@ impl LoadedProfile {
                     }
                     "read_buffer" => {
                         // A malformed key must NOT coerce to buffer id 0: that is
-                        // a legitimate buffer id, so a typo'd key would silently
-                        // overwrite/shadow a real buffer-0 entry (which
-                        // find_read_buf would then serve wrong). Warn and skip,
-                        // mirroring the [features] and current_profile handling.
+                        // legitimate, so a typo'd key would silently shadow a real
+                        // buffer-0 entry. Warn and skip, mirroring [features] above.
                         match u8::from_str_radix(
                             key.trim_start_matches("0x").trim_start_matches("0X"),
                             16,
@@ -259,10 +220,9 @@ impl LoadedProfile {
             }
         }
 
-        // Load binary files. Every blob filename below comes from the
-        // (untrusted) drive.toml, so it is resolved through read_blob, which
-        // refuses any name that would escape the profile directory — see
-        // read_blob for the full rationale.
+        // Load binary files. Every blob filename below comes from the untrusted
+        // drive.toml, so it's resolved through read_blob, which refuses any name
+        // that would escape the profile directory — see read_blob for details.
         let inquiry = read_blob(dir, &inquiry_file);
 
         let mut features: Vec<(u16, Vec<u8>)> = Vec::new();
@@ -306,11 +266,9 @@ impl LoadedProfile {
             }
         }
 
-        // Load disc if BDEMU_DISC is set. BDEMU_DISC is operator-supplied, but
-        // apply the same path-traversal containment that control.rs enforces on
-        // the (untrusted) control-socket peer, so the two disc-selection paths
-        // can't diverge: reject separators/dot components and assert the
-        // canonicalized target stays under the discs/ base.
+        // Load disc if BDEMU_DISC is set. Apply the same path-traversal containment
+        // control.rs enforces on the untrusted control-socket peer, so the two
+        // disc-selection paths can't diverge (reject `..`, stay under discs/).
         let disc = std::env::var("BDEMU_DISC")
             .ok()
             .and_then(|disc_name| safe_disc_dir(&dir.join("discs"), &disc_name))
@@ -392,11 +350,9 @@ impl LoadedProfile {
 
         let mut features = Vec::new();
         for (code_str, feat) in &p.get_config.features {
-            // A malformed key must NOT fall back to 0x0000: that is the real MMC
-            // Profile List feature code, so a typo'd JSON feature key would
-            // silently coerce to 0 and inject/overwrite legitimate Profile List
-            // data in the GET CONFIGURATION response. Skip it with a warning,
-            // mirroring the TOML [features] loader and the read_buffer handling.
+            // A malformed key must NOT fall back to 0x0000 (the real MMC Profile
+            // List feature code): a typo'd key would silently overwrite legitimate
+            // Profile List data. Skip with a warning, mirroring the TOML loader.
             let code = match parse_u16_opt(code_str) {
                 Some(c) => c,
                 None => {
@@ -432,10 +388,9 @@ impl LoadedProfile {
             }
         }
 
-        // A malformed/empty current_profile must not silently become 0x0000
-        // ("No current profile"): warn and fall back to the 0x0043 BD-ROM
-        // default, matching the TOML loader so the emulated drive never reports
-        // no active profile to libfreemkv's GET CONFIGURATION.
+        // A malformed/empty current_profile must not silently become 0x0000 ("No
+        // current profile"): warn and fall back to the 0x0043 BD-ROM default so
+        // the emulated drive never reports no active profile to libfreemkv.
         let current_profile = match parse_u16_opt(&p.get_config.current_profile) {
             Some(v) => v,
             None => {
@@ -509,20 +464,9 @@ pub fn safe_disc_dir(discs_base: &Path, name: &str) -> Option<std::path::PathBuf
 
     let disc_dir = discs_base.join(name);
 
-    // Belt-and-suspenders: canonicalize and assert the result stays under the
-    // discs directory. Canonicalization only succeeds for existing paths.
-    //
-    // Treat a canonicalize failure as a reject rather than silently skipping the
-    // containment check: if the base canonicalizes but disc_dir does not (e.g. a
-    // symlink whose target was transiently removed), we cannot prove containment,
-    // so we refuse. The lexical pre-filter above already blocks component
-    // escapes, so this is defense-in-depth — but it must never be silently
-    // disabled.
-    //
-    // Return the CANONICAL resolved path (not the unresolved lexical join) so the
-    // caller's subsequent load_disc reads target the same inode we just verified —
-    // closing the TOCTOU window where a symlink swap between this check and the
-    // read could redirect load_disc to a different file.
+    // Belt-and-suspenders: canonicalize and assert the result stays under discs/;
+    // a canonicalize failure is a reject, not a skip (defense-in-depth on top of
+    // the lexical pre-filter). Return the CANONICAL path, closing a symlink-swap TOCTOU.
     match discs_base.canonicalize() {
         Ok(base) => match disc_dir.canonicalize() {
             Ok(resolved) if resolved.starts_with(&base) && resolved.is_dir() => Some(resolved),
@@ -714,10 +658,9 @@ fn parse_toml_value(raw: &str) -> String {
             None => rest.split('#').next().unwrap_or("").trim().to_string(),
         }
     } else {
-        // Unquoted: a `#` begins a comment. Do NOT trim_matches('"') here — this
-        // branch only runs when the value does not start with a quote, so any
-        // `"` present is part of the value (e.g. `ACME "Pro"`) and stripping it
-        // would silently truncate trailing quote characters.
+        // Unquoted: a `#` begins a comment. Do NOT trim_matches('"') here — any
+        // `"` present is part of the value itself (e.g. `ACME "Pro"`), and
+        // stripping it would silently truncate trailing quote characters.
         trimmed.split('#').next().unwrap_or("").trim().to_string()
     }
 }
@@ -798,11 +741,9 @@ mod tests {
 
     #[test]
     fn huge_num_ranges_serves_nothing() {
-        // 0xFFFFFFFF ranges declared but no body: must not try to allocate
-        // billions of entries. And because the file DID match the BDSM magic, the
-        // corrupt bail-out must serve NOTHING (empty sectors + empty map), not keep
-        // the header bytes as a flat dump — see the block comment in
-        // parse_sector_file.
+        // 0xFFFFFFFF ranges declared but no body: must not allocate billions of
+        // entries, and since the file DID match BDSM magic, the corrupt bail-out
+        // must serve NOTHING, not the header bytes as a flat dump (see parse_sector_file).
         let data = bdsm_header(0xFFFF_FFFF);
         let (sectors, map) = parse_sector_file(data);
         assert!(map.is_empty(), "hostile num_ranges must not build a map");
@@ -864,15 +805,9 @@ mod tests {
 
     #[test]
     fn out_of_order_ranges_are_sorted_for_binary_search() {
-        // A capture tool that emits ranges in non-ascending LBA order must still
-        // resolve correctly: parse_sector_file sorts the map by start_lba so
-        // lookup_sector's binary search finds every present sector. Without the
-        // sort, binary_search would return Err for sectors that ARE captured and
-        // READ would silently zero-fill them.
-        //
-        // Two ranges declared OUT of LBA order (range starting at LBA 1000 first,
-        // then range starting at LBA 100). Payloads tagged with distinct bytes so
-        // we can prove each lookup lands on the right range's data.
+        // A capture tool emitting ranges out of ascending LBA order must still
+        // resolve correctly: without parse_sector_file's sort, lookup_sector's
+        // binary search would miss captured sectors and READ would zero-fill them.
         let mut data = bdsm_header(2);
         // Range 0 (file order): LBA 1000, 1 sector, payload 0xCC
         data.extend_from_slice(&1000u32.to_le_bytes());
@@ -941,10 +876,9 @@ mod tests {
     #[test]
     fn json_invalid_feature_code_is_skipped_not_coerced_to_zero() {
         use std::io::Write;
-        // A JSON profile whose feature map has one valid key (0x010C) and one
-        // garbage key ("oops"). The garbage key must be SKIPPED, not silently
-        // coerced to 0x0000 (the real Profile List feature code), which would
-        // inject a bogus Profile List descriptor into GET CONFIGURATION.
+        // A garbage feature key ("oops") must be SKIPPED, not silently coerced to
+        // 0x0000 (the real Profile List feature code), which would inject a bogus
+        // Profile List descriptor into GET CONFIGURATION.
         let json = r#"{
             "drive": { "product": "TEST" },
             "inquiry": { "raw": "00" },
@@ -1140,10 +1074,9 @@ mod tests {
             map.is_empty(),
             "overlapping ranges must not build an ambiguous map"
         );
-        // And the file bytes must be discarded, not kept as a flat dump: keeping
-        // them would serve the BDSM header as sector 0 at GOOD. The end-to-end
-        // proof that a READ then misses is
-        // scsi::tests::read10_overlapping_capture_serves_nothing_not_header.
+        // The file bytes must be discarded, not kept as a flat dump: keeping them
+        // would serve the BDSM header as sector 0 at GOOD (end-to-end proof in
+        // scsi::tests::read10_overlapping_capture_serves_nothing_not_header).
         assert!(
             sectors.is_empty(),
             "an overlapping BDSM must serve no sectors, not its header as flat data"

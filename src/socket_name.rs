@@ -1,11 +1,6 @@
-// bdemu — Control socket path policy, shared between the cdylib (control.rs)
-// and the CLI binary (bin.rs).
-//
-// The library is a `cdylib` and cannot be linked as an rlib, so the binary
-// cannot import items from it directly. The socket-path policy therefore lives
-// here once and both sides pull it in via `#[path = "socket_name.rs"]`, so the
-// bind side and the connect side cannot drift apart — a drift would mean
-// `bdemu load` silently talking to nothing (or, worse, to the wrong emulator).
+// bdemu — Control socket path policy, shared via `#[path = "socket_name.rs"]`
+// between the cdylib and CLI binary so bind and connect sides can't drift
+// apart — drift would mean `load` silently talking to nothing.
 
 use std::path::PathBuf;
 

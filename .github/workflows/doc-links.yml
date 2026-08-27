@@ -1,0 +1,46 @@
+name: doc-links
+
+# Fails on broken intra-doc links in `///`/`//!` doc comments (e.g. a `[Type]`
+# link to a renamed/removed item). Catches doc drift that `cargo build` misses.
+#
+# bdemu resolves libfreemkv + freemkv-unlock from their sibling checkouts (like
+# ci.yml): a [patch.crates-io] redirect points libfreemkv at the sibling, and
+# freemkv-unlock resolves through bdemu's committed path dep.
+
+on: [push, pull_request]
+
+jobs:
+  doc-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: bdemu
+      - uses: actions/checkout@v7
+        with:
+          repository: freemkv/libfreemkv
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
+          path: libfreemkv
+      - uses: actions/checkout@v7
+        with:
+          repository: freemkv/freemkv-unlock
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
+          path: freemkv-unlock
+      - name: Resolve siblings from their dev tips
+        shell: bash
+        working-directory: bdemu
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [patch.crates-io]
+          libfreemkv = { path = "../libfreemkv" }
+          EOF
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bdemu
+      - name: cargo doc (deny broken intra-doc links)
+        working-directory: bdemu
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"
+        run: cargo doc --no-deps --document-private-items --lib --bins

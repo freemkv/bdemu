@@ -1,6 +1,4 @@
-// bdemu — Blu-ray Drive Emulator
-// MIT — freemkv project
-//
+// bdemu — Blu-ray Drive Emulator (MIT — freemkv project)
 // LD_PRELOAD entry point — intercepts ioctl(SG_IO) calls
 
 mod control;
@@ -44,22 +42,17 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
         if has_disc { "yes" } else { "no" }
     );
 
-    // LoadedProfile::load accepts both a directory and a `.json` file. The
-    // control socket treats profile_dir as a base directory it joins "discs"
-    // onto, so when the profile is a JSON file we store its parent directory
-    // (otherwise `load`/`list-discs` would build paths like
-    // `/path/profile.json/discs/<name>` and silently fail).
+    // The control socket joins "discs" onto profile_dir as a base directory,
+    // so when the profile is a JSON file we store its parent directory
+    // (otherwise load/list-discs would build a bogus nested path and fail).
     let profile_base = {
         let p = std::path::PathBuf::from(&path);
         if p.is_dir() {
             p
         } else {
-            // A bare filename like "profile.json" yields parent ""
-            // (Path::parent returns Some(Path::new("")), never None), so the
-            // old `.unwrap_or_else(|| ".")` fallback was dead and profile_base
-            // became "" — joining "discs" onto "" gives the cwd-relative
-            // "discs", which diverges from "./discs" if the process chdir's.
-            // Map an empty parent explicitly to "." so the fallback fires.
+            // A bare filename like "profile.json" yields parent "" (never None),
+            // which would join "discs" onto "" as a cwd-relative path that
+            // diverges from "./discs" after a chdir. Map empty parent to ".".
             match p.parent() {
                 Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
                 _ => std::path::PathBuf::from("."),
@@ -112,11 +105,9 @@ unsafe fn forward_ioctl(
 ) -> libc::c_int {
     match *REAL_IOCTL {
         Some(real) => unsafe { real(fd, request, arg) },
-        // dlsym never found the real ioctl: signal failure. POSIX requires a
-        // failing ioctl() to leave a meaningful errno, so set EINVAL rather than
-        // leaving a stale value before returning -1. The shim ships as a
-        // Linux .so; the cfg below keeps the non-Linux precommit build (macOS)
-        // compiling with the platform's errno accessor.
+        // dlsym never found the real ioctl: fail with EINVAL rather than a stale
+        // errno. The shim ships as a Linux .so; the cfg below just keeps the
+        // non-Linux precommit build (macOS) compiling with its errno accessor.
         None => {
             unsafe {
                 #[cfg(target_os = "linux")]
@@ -153,18 +144,9 @@ pub unsafe extern "C" fn ioctl(
         None => return unsafe { forward_ioctl(fd, request, arg) },
     };
 
-    // This cdylib builds under the default panic=unwind — no panic=abort is
-    // configured anywhere (not in Cargo.toml, not in .cargo/config.toml, not in
-    // CI). So this catch_unwind is the SOLE guard against UB from a panic
-    // unwinding across this `extern "C"` boundary — do NOT remove it as a
-    // "redundant" backstop. Contain any panic from the SCSI handler (e.g. a
-    // poisoned lock, an out-of-bounds slice on a crafted profile) here and
-    // report CHECK CONDITION / HARDWARE ERROR instead of unwinding.
-    //
-    // Fail the build if a future profile flips us to panic=abort: catch_unwind is
-    // a no-op under panic=abort, so the guard would silently stop guarding (a
-    // handler panic would abort the host process mid-ioctl instead of returning a
-    // SCSI error). Better a compile error than a silent loss of the only UB guard.
+    // This cdylib builds panic=unwind, so catch_unwind is the SOLE guard against
+    // UB from a panic crossing this `extern "C"` boundary — do not remove it.
+    // The compile_error below fails the build (not silently) if that ever flips.
     #[cfg(panic = "abort")]
     compile_error!(
         "bdemu requires panic=unwind: the extern \"C\" ioctl catch_unwind is the sole UB guard"
@@ -186,13 +168,9 @@ pub unsafe extern "C" fn ioctl(
         // Best-effort: surface a CHECK CONDITION / HARDWARE ERROR to the host
         // so the caller sees a SCSI failure rather than corrupt/stale data.
         let hdr = unsafe { &mut *(arg as *mut SgIoHdr) };
-        // Clear first: set_check_condition only writes status/masked_status and
-        // (conditionally) the sense buffer, leaving resid/host_status/
-        // driver_status/sb_len_wr untouched. If the panic fired before
-        // handle_scsi reached its own clear_status() (e.g. in the
-        // UNIT_ATTENTION branch or while computing the opcode), those fields
-        // would still hold caller-supplied values, presenting inconsistent
-        // metadata alongside the recovered SCSI status.
+        // Clear first: set_check_condition only touches status/masked_status/sense,
+        // leaving resid/host_status/driver_status/sb_len_wr untouched. If the panic
+        // fired before handle_scsi's own clear_status(), those could hold stale data.
         hdr.clear_status();
         hdr.set_check_condition(0x04, 0x44, 0x00); // HARDWARE ERROR / INTERNAL TARGET FAILURE
     }
