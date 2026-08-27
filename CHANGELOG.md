@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.12] — UNRELEASED
+
+### Changed
+
+- Comment and documentation cleanup.
+
 ## [1.6.11] — 2026-08-26
 
 ### Changed
