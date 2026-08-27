@@ -1,8 +1,6 @@
-// bdemu — Control socket for runtime interaction
-// MIT — freemkv project
-//
-// The LD_PRELOAD library listens on a Unix socket for commands.
-// The CLI binary sends commands to control the running emulator.
+// bdemu — Control socket for runtime interaction, MIT — freemkv project
+// The LD_PRELOAD library listens on a Unix socket for commands; the CLI
+// binary sends commands to control the running emulator.
 
 use crate::profile::SECTOR_SIZE;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -10,10 +8,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-// The control-socket path policy (private per-user runtime dir, refusal of the
-// insecure /tmp fallback, and the per-instance socket name) is shared with the
-// CLI binary via a `#[path]` include so the bind side here and the connect side
-// in bin.rs cannot drift apart.
+// The control-socket path policy (private runtime dir, refusal of the /tmp
+// fallback, per-instance name) is shared with the CLI via a `#[path]` include
+// so the bind side here and the connect side in bin.rs cannot drift apart.
 #[path = "socket_name.rs"]
 mod socket_name;
 pub use socket_name::socket_path;
@@ -142,12 +139,8 @@ pub fn start_listener(
     }
 
     // Tighten umask to 0o177 around bind so the socket is created owner-only
-    // (0600) from the start. set_permissions after bind would still leave a
-    // brief world-accessible window during which a local peer could connect and
-    // issue load/eject/status — the TOCTOU this closes. The socket lives in the
-    // per-user XDG_RUNTIME_DIR (0700) so it is not world-reachable anyway, but
-    // 0600 keeps it owner-only for defense in depth. umask is process-global, so
-    // restore the previous value immediately after.
+    // (0600) from the start — set_permissions after bind would leave a brief
+    // world-accessible TOCTOU window. umask is process-global; restore after.
     #[cfg(unix)]
     let prev_umask = unsafe { libc::umask(0o177) };
 
@@ -178,34 +171,23 @@ pub fn start_listener(
 
     eprintln!("bdemu: control socket at {}", path.display());
 
-    // Spawn the accept loop on a named thread via Builder rather than
-    // thread::spawn: spawn() panics if the OS refuses the thread (e.g. EAGAIN
-    // at RLIMIT_NPROC), and start_listener is forced from the STATE Lazy init
-    // that runs BEFORE the catch_unwind in the exported `extern "C" fn ioctl`.
-    // A panic here would unwind across the C boundary (UB under panic=unwind),
-    // so degrade like the socket-bind failure above: log and return.
+    // Builder, not thread::spawn: spawn() panics if the OS refuses the thread,
+    // and start_listener runs before the catch_unwind in the exported
+    // `extern "C" fn ioctl` — a panic here would unwind across the C boundary.
     let accept = std::thread::Builder::new()
         .name("bdemu-ctl-accept".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
-                    // Handle each connection on its own thread. cmd_load reads
-                    // sectors.bin (multi-GB) off-lock before its O(1) under-lock
-                    // swap; if that read ran inline in the accept loop, no new
-                    // connection would be accepted for its whole duration and a
-                    // concurrent `status`/`eject`/`list-discs` (5s CLI read timeout)
-                    // would time out. The shared state is Arc<Mutex<_>>, so
-                    // per-connection threads are safe and the lone serialized
-                    // section stays the brief swap inside cmd_load.
+                    // Each connection gets its own thread: cmd_load reads
+                    // sectors.bin (multi-GB) off-lock, so running it inline here
+                    // would stall every concurrent status/eject/list-discs call.
                     Ok(stream) => {
                         let profile = Arc::clone(&profile);
                         let state = Arc::clone(&state);
-                        // Builder again, not thread::spawn: a spawn panic on
-                        // thread exhaustion would kill the accept loop. Degrade
-                        // instead — log and drop this one connection, keep
-                        // accepting. Do NOT fall back to inline handling, which
-                        // would re-block the accept loop for the full cmd_load
-                        // read window.
+                        // Builder again: a spawn panic on thread exhaustion
+                        // would kill the accept loop. Degrade — log and drop
+                        // this connection, keep accepting (not inline handling).
                         if let Err(e) = std::thread::Builder::new()
                             .name("bdemu-ctl-conn".into())
                             .spawn(move || handle_client(stream, &profile, &state))
@@ -227,23 +209,18 @@ fn handle_client(
     profile: &Arc<Mutex<crate::profile::LoadedProfile>>,
     state: &Arc<Mutex<EmulatorState>>,
 ) {
-    // Each connection runs on its own thread, so a peer that connects but never
-    // sends a newline blocks only its own thread — not the listener. But without
-    // a bound such threads accumulate without limit, one per stalled peer, until
-    // the process exhausts threads/memory. Cap each read with a timeout, and
-    // surface the failure: if set_read_timeout fails this protection silently does
-    // not exist, so make it visible rather than discarding the Result.
+    // A stalled peer blocks only its own thread, but without a bound such
+    // threads accumulate until the process exhausts threads/memory. Cap each
+    // read with a timeout, and log if set_read_timeout itself fails.
     if stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .is_err()
     {
         eprintln!("bdemu: failed to set control-socket read timeout");
     }
-    // Symmetric write timeout: a client that connects then stops draining its
-    // receive buffer would otherwise block writeln! forever, leaving this thread
-    // alive indefinitely. Payloads are tiny so this is low-probability, but the
-    // rationale matches the read timeout — bound the per-thread lifetime so a
-    // single misbehaving peer cannot leak a thread.
+    // Symmetric write timeout: a client that stops draining its receive buffer
+    // would otherwise block writeln! forever. Low-probability given tiny
+    // payloads, but bounds the per-thread lifetime like the read timeout.
     if stream
         .set_write_timeout(Some(std::time::Duration::from_secs(5)))
         .is_err()
@@ -251,20 +228,14 @@ fn handle_client(
         eprintln!("bdemu: failed to set control-socket write timeout");
     }
 
-    // One command per connection: read a single line, respond, drop the socket.
-    // Cap the read at 1 KiB so a local peer cannot force unbounded heap growth by
-    // slowly streaming bytes without a newline — every chunk resets the 5s read
-    // timeout, so the timeout bounds the inter-read gap, not the total length. All
-    // valid commands are tiny ("status\n", "load <name>\n", etc.), so 1 KiB is a
-    // generous ceiling. take() simply stops yielding at the limit; an over-long
-    // line gets truncated and then falls through to the normal command-parse path,
-    // which rejects it as an unknown command — no panic, no OOM.
+    // One command per connection. Cap the read at 1 KiB so slow byte-at-a-time
+    // streaming can't grow heap unbounded (the timeout only bounds the inter-read
+    // gap). take() truncates; an over-long line just falls to unknown-command.
     let mut reader = BufReader::new(&stream).take(1024);
     let mut line = String::new();
-    // Ok(0) is a clean EOF: a peer that connects and immediately closes yields
-    // an empty line, and parse_command("") -> None would otherwise write a
-    // spurious "ERR unknown command:" to a socket the peer already closed.
-    // Treat EOF and read errors alike: respond to neither, log nothing.
+    // Ok(0) is a clean EOF: parse_command("") -> None would otherwise write a
+    // spurious error to a socket the peer already closed. Treat EOF and read
+    // errors alike: respond to neither, log nothing.
     match reader.read_line(&mut line) {
         Ok(0) | Err(_) => return,
         _ => {}
@@ -290,11 +261,9 @@ fn handle_client(
             break;
         }
     }
-    // Terminate a fully-written response with the shared sentinel so the CLI can
-    // tell a complete reply from one cut short by a timeout/crash (see
-    // CONTROL_TERMINATOR). Only emit it when every response line was written: if a
-    // write already failed the reply is incomplete, so withholding the terminator
-    // is exactly what lets the CLI detect the truncation.
+    // Terminate with the shared sentinel so the CLI can tell a complete reply
+    // from one cut short (see CONTROL_TERMINATOR). Only emit it when every line
+    // wrote successfully — withholding it is how the CLI detects truncation.
     if wrote_all {
         let _ = writeln!(writer, "{}", socket_name::CONTROL_TERMINATOR);
     }
@@ -358,11 +327,9 @@ fn cmd_load(
         return Response::error("usage: load <disc_name>");
     }
 
-    // Validate + resolve the disc directory under-lock so a concurrent
-    // rename/symlink swap cannot slip between the canonicalize-based containment
-    // check and our decision to load it. The name comes from an untrusted
-    // control-socket peer, so the path-traversal containment is shared with the
-    // BDEMU_DISC env path via the single profile::safe_disc_dir guard.
+    // Resolve the disc directory under-lock so a concurrent rename/symlink
+    // swap can't slip in between the containment check and loading it. The
+    // name is untrusted, so containment reuses the safe_disc_dir guard.
     let disc_dir = {
         let st = lock_recover(state);
         let discs_base = st.profile_dir.join("discs");
@@ -376,12 +343,9 @@ fn cmd_load(
         }
     };
 
-    // Read the disc OFF-lock: load_disc issues fs::read for sectors.bin (which
-    // can be gigabytes), toc.bin, capacity.bin, disc_info.bin, sector_data.bin
-    // and each ds_*.bin. The shared state is Arc<Mutex<_>>, so holding the lock
-    // across that read would block every concurrent command thread (status/eject/
-    // list-discs) and any SCSI path that locks the same mutexes for the whole read
-    // window. Load into a local, then re-acquire and swap in O(1).
+    // Read the disc OFF-lock: load_disc reads sectors.bin (can be gigabytes)
+    // plus other files, and holding the mutex across that would block every
+    // concurrent command thread. Load into a local, then swap in O(1).
     let disc = crate::profile::load_disc(&disc_dir);
     let sector_count = disc_sector_count(&disc);
 
@@ -417,11 +381,9 @@ fn disc_sector_count(d: &crate::profile::DiscProfile) -> usize {
 }
 
 fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
-    // Copy the two values we need out of the guard and drop it BEFORE touching
-    // the filesystem. The shared state is Arc<Mutex<_>>, so holding the state lock
-    // across read_dir + entry iteration would stall every concurrent command
-    // thread that locks the same mutex (status, eject, and load's validation
-    // phase) for the full directory scan. Mirrors cmd_load.
+    // Copy what we need out of the guard and drop it before touching the
+    // filesystem: holding the lock across read_dir + iteration would stall
+    // every concurrent command thread for the full directory scan.
     let (discs_dir, loaded_name) = {
         let st = lock_recover(state);
         (
@@ -445,14 +407,9 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
                 } else {
                     ""
                 };
-                // The directory name is untrusted: profiles arrive from strangers
-                // through the documented GitHub-issue workflow, and this line is
-                // written to the control socket for the CLI to print verbatim to a
-                // terminal. An ESC in a disc directory name would otherwise repaint
-                // or erase the operator's screen, and an embedded newline would
-                // forge extra response lines in a newline-delimited protocol —
-                // including a fake leading "OK". Compare on the RAW name (that is
-                // what `load` addresses) but display the sanitised form.
+                // Untrusted name printed to a terminal: an ESC could repaint the
+                // screen, a newline could forge a response line. Compare on the
+                // RAW name (what `load` addresses) but display the sanitised form.
                 lines.push(format!(
                     "  {}{} (sectors={})",
                     sanitize_for_terminal(&name),
@@ -498,22 +455,18 @@ mod tests {
         let (profile, state) = fixture_state();
         let worker = std::thread::spawn(move || handle_client(server, &profile, &state));
 
-        // Write on a side thread that tolerates a broken pipe: once the server
-        // hits its 1 KiB read cap it responds and drops the socket, so a client
-        // still pushing a larger payload sees EPIPE. That is the cap working, not
-        // a test failure — ignore the write result and just read the response.
+        // Tolerates a broken pipe: once the server hits its 1 KiB cap it
+        // responds and drops the socket, so a client still pushing sees EPIPE.
+        // That's the cap working, not a test failure — ignore the write result.
         let mut writer = client.try_clone().expect("clone");
         let pusher = std::thread::spawn(move || {
             let _ = writer.write_all(&input);
             let _ = writer.shutdown(std::net::Shutdown::Write);
         });
 
-        // Read tolerantly: once the server hits its 1 KiB cap it writes the
-        // response and drops the socket, so the client's read can surface
-        // ECONNRESET right after the bytes arrive. `read_to_string` discards
-        // everything on any error (it restores the buffer to keep UTF-8 valid),
-        // which would lose the response and fail the test on a timing race;
-        // `read_to_end` retains the bytes read before the error. Decode lossily.
+        // Read tolerantly: the server drops the socket right after writing, so
+        // the read can surface ECONNRESET. `read_to_string` would discard
+        // everything on error; `read_to_end` keeps bytes read so far. Decode lossily.
         let mut buf = Vec::new();
         let mut reader = client;
         let _ = reader.read_to_end(&mut buf);
