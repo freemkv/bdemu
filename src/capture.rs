@@ -1,9 +1,6 @@
-// bdemu — Blu-ray Drive Emulator
-// MIT — freemkv project
-//
-// Smart disc capture — uses libfreemkv to open/unlock the drive,
-// parses UDF to find metadata sector ranges, writes sparse BDSM format.
-// Only captures sectors disc-info needs (~5MB per disc).
+// bdemu — Blu-ray Drive Emulator, MIT — freemkv project
+// Smart disc capture: opens/unlocks via libfreemkv, parses UDF for metadata
+// ranges, and writes only the sparse BDSM sectors disc-info needs (~5MB/disc).
 
 use libfreemkv::{Drive, scsi};
 use std::fs;
@@ -75,10 +72,9 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         session.drive_id.product_revision.trim()
     );
 
-    // SCSI metadata. `metadata_errors` counts hard failures (transport / non-
-    // ILLEGAL-REQUEST) on *required* structures, so a capture that silently
-    // dropped capacity/TOC/PFI/DI to a drive fault is reported as incomplete
-    // rather than clean.
+    // SCSI metadata. `metadata_errors` counts hard (transport/non-ILLEGAL-
+    // REQUEST) failures on *required* structures, so a drive fault that drops
+    // capacity/TOC/PFI/DI is reported as incomplete, not clean.
     println!();
     let mut metadata_errors: u32 = 0;
     // (filename, label, cdb, size, required)
@@ -145,15 +141,9 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         .metadata_sector_ranges(&mut session)
         .map_err(|e| format!("ranges: {}", e))?;
 
-    // Single source of truth for "how many sectors this range actually
-    // contributes". The read loop below only emits `end - start` sectors where
-    // `end = start.saturating_add(count)`, so for a hostile/corrupt range with
-    // `start + count > u32::MAX` the saturated `written` is smaller than the
-    // raw `count`. Normalize once here and use `written` for the BDSM header
-    // count field, the `total`, the file_size, and the read loop alike — so the
-    // table, the total, and the bytes actually on disk can never disagree (a
-    // consumer reading by the table would otherwise run past real bytes into
-    // the next range).
+    // Single source of truth for sectors each range contributes: `end`
+    // saturates, so a hostile range can make raw `count` overstate `written`.
+    // Use `written` everywhere (header, total, read loop) so they never disagree.
     let ranges: Vec<(u32, u32)> = raw_ranges
         .iter()
         .map(|(start, count)| (*start, start.saturating_add(*count) - start))
@@ -198,9 +188,8 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
     // Read and write each range
     let chunk: u16 = 32;
     // One reusable read buffer for the whole capture instead of a fresh
-    // `vec![0u8; ...]` per chunk (~160 malloc+memset per 5 MB capture). We slice
-    // it to the chunk size each iteration and explicitly zero the used slice on
-    // a read error to preserve the prior zero-fill-on-error behavior.
+    // `vec![0u8; ...]` per chunk (~160 malloc+memset per 5 MB capture). Sliced
+    // to the chunk size each iteration; zeroed explicitly on a read error.
     let mut buf = vec![0u8; chunk as usize * SECTOR_SIZE];
     let mut done: u32 = 0;
     let mut errors: u32 = 0;
@@ -214,20 +203,16 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         let end = start.saturating_add(*written);
 
         while lba < end {
-            // Clamp the chunk size entirely in u32 BEFORE truncating to u16.
-            // `(end - lba) as u16` alone truncates to 0 when the remaining
-            // sector count is a nonzero multiple of 65536 (e.g. exactly
-            // 65536), so `lba += 0` / `done += 0` would spin forever.
+            // Clamp the chunk size in u32 BEFORE truncating to u16: `(end -
+            // lba) as u16` alone truncates to 0 when the remainder is a nonzero
+            // multiple of 65536, which would make `lba += 0` spin forever.
             let n = next_chunk(lba, end, chunk);
             let slice = &mut buf[..n as usize * SECTOR_SIZE];
 
             match session.read(lba, n, slice, true) {
-                // The buffer is reused across iterations, so any bytes the read
-                // does not fill retain the previous chunk's contents. On a short
-                // Ok read (`bytes < slice.len()`) zero the untouched tail so the
-                // fixture records zeros there, not stale neighbor data — matching
-                // the per-iteration `vec![0u8; ..]` semantics this reuse replaced.
-                // Clamp `bytes` defensively in case the transport over-reports.
+                // Buffer is reused, so a short read leaves stale bytes from the
+                // previous chunk. Zero the untouched tail so the fixture records
+                // zeros, not stale data; `bytes` is clamped against over-report.
                 Ok(bytes) => zero_fill_tail(slice, bytes),
                 Err(e) => {
                     errors += 1;
@@ -297,25 +282,17 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
     if eject {
         print_step("  Ejecting... ");
         // Don't discard the result: reporting "done" while the disc is still
-        // seated (eject failed) is misleading on a slot-loading drive.
-        // Keep the result on the same stream as the "  Ejecting... " label
-        // (stdout, printed without a trailing newline above): a split
-        // println!/eprintln! pair leaves the stdout label dangling and the
-        // error on a different stream, which is visibly broken under
-        // redirection/piping. fixture_result-driven exit status still reports
-        // the overall capture outcome to scripts/CI.
+        // seated is misleading. Print on stdout (same stream as the label,
+        // no trailing newline above) so redirection/piping doesn't split them.
         match session.eject() {
             Ok(()) => println!("done"),
             Err(e) => println!("eject failed: {} (disc may still be seated)", e),
         }
     }
 
-    // A fixture with zero-filled bad sectors — or a required SCSI structure
-    // lost to a hard drive/transport fault — is silently corrupt: callers
-    // (scripts/CI) must be able to tell a partial capture from a clean one.
-    // The bytes are already written above so the partial dump is preserved for
-    // inspection, but we surface a non-Ok result and skip the slugified rename
-    // (an incomplete capture should not claim a clean disc name).
+    // A fixture with zero-filled sectors or a lost required SCSI structure is
+    // silently corrupt: callers (scripts/CI) must tell a partial capture from
+    // a clean one. Bytes stay written for inspection, but skip the slug rename.
     fixture_result(errors, metadata_errors)?;
 
     // Rename output dir to slugified volume ID

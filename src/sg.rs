@@ -1,6 +1,4 @@
-// bdemu — Blu-ray Drive Emulator
-// MIT — freemkv project
-//
+// bdemu — Blu-ray Drive Emulator, MIT — freemkv project
 // Linux SG_IO bindings
 
 pub const SG_IO: libc::c_ulong = 0x2285;
@@ -32,24 +30,17 @@ pub struct SgIoHdr {
     pub info: u32,                  // [o] auxiliary information
 }
 
-// SgIoHdr is cast to/from a raw kernel pointer through the LD_PRELOAD ioctl
-// intercept, so its layout must match the kernel's sg_io_hdr_t exactly. The
-// matching client struct in libfreemkv (src/scsi/linux.rs) carries the same
-// assertions; mirror them so any field/layout drift fails at compile time
-// instead of corrupting memory silently. 88 bytes on 64-bit, 64 on 32-bit.
+// Cast to/from a raw kernel pointer via the LD_PRELOAD ioctl intercept, so this
+// layout must match the kernel's sg_io_hdr_t exactly. libfreemkv's linux.rs
+// client mirrors these assertions so drift fails at compile time, not silently.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<SgIoHdr>() == 88);
 #[cfg(target_pointer_width = "32")]
 const _: () = assert!(std::mem::size_of::<SgIoHdr>() == 64);
 
-// Safety contract for the raw-pointer methods below (`write_response`,
-// `set_check_condition`, `opcode`, `cdb`): when `dxferp`, `sbp`, or `cmdp` is
-// non-null it must point to at least `dxfer_len`, `mx_sb_len`, or `cmd_len`
-// valid, writable (or for `cmdp`, readable) bytes respectively. The LD_PRELOAD
-// SG_IO ioctl intercept that hands us this header is the sole caller and
-// guarantees these invariants — it forwards the buffers the kernel sg driver
-// validated. The methods additionally guard each access on a null check and the
-// corresponding length, so a null pointer is always safe.
+// Safety contract for the raw-pointer methods below: when `dxferp`/`sbp`/`cmdp`
+// is non-null it must point to at least `dxfer_len`/`mx_sb_len`/`cmd_len` valid
+// bytes, guaranteed by our sole caller (the LD_PRELOAD SG_IO intercept).
 impl SgIoHdr {
     /// Clear all output status fields (success)
     pub fn clear_status(&mut self) {
@@ -101,52 +92,25 @@ impl SgIoHdr {
     /// Write response data from slice
     pub fn write_response(&mut self, data: &[u8]) {
         if self.dxferp.is_null() || self.dxfer_len == 0 {
-            // Nothing transferred: the whole declared length is residual.
-            // Saturate the u32->i32 cast (a dxfer_len above i32::MAX would
-            // otherwise wrap to a negative residual). The hot path below
-            // saturates the same cast identically. Optical transfers stay well
-            // under 2 GB so this is latent, not triggerable.
+            // Nothing transferred: whole length is residual. Saturate the u32->i32
+            // cast so dxfer_len above i32::MAX can't wrap negative (latent only).
             self.resid = self.dxfer_len.min(i32::MAX as u32) as i32;
             return;
         }
         let len = std::cmp::min(data.len(), self.dxfer_len as usize);
         let dxfer_len = self.dxfer_len as usize;
         unsafe {
-            // Copy the response, then zero only the part of the host buffer the
-            // response did not cover.
-            //
-            // This used to `write_bytes(dxferp, 0, dxfer_len)` over the WHOLE
-            // buffer first and then overwrite it — in the common case (a response
-            // exactly as long as the transfer, i.e. every READ) a full redundant
-            // pass over the data. Measured on this workstation: 48.9 ns vs 26.2 ns
-            // per 2048-byte transfer, 1218 ns vs 789 ns at 64 KiB — the memset is
-            // roughly half the cost of the whole call. (Measured on aarch64/macOS,
-            // not the aarch64/x86-64 Linux this ships to; the shape of the win —
-            // one memory pass instead of two — is architecture-independent, the
-            // exact numbers are not.)
-            //
-            // The zero-fill itself is NOT optional and must not be "optimised"
-            // away: a short response (INQUIRY, GET_CONFIGURATION, READ_TOC, …)
-            // would otherwise leave the host's own stale buffer contents visible
-            // past the response, which the host cannot distinguish from data we
-            // returned. Only the redundant part of it is dropped here.
+            // Copy the response, then zero only the uncovered tail (was a full
+            // write_bytes over the buffer first: ~2x slower). Zeroing is NOT
+            // optional: a short response would leave stale host data visible.
             std::ptr::copy_nonoverlapping(data.as_ptr(), self.dxferp, len);
             if len < dxfer_len {
                 std::ptr::write_bytes(self.dxferp.add(len), 0, dxfer_len - len);
             }
         }
-        // Report the unfilled tail as residual. The kernel sg driver sets
-        // resid = dxfer_len - bytes_actually_transferred, and the libfreemkv
-        // client (src/scsi/linux.rs) computes
-        // bytes_transferred = data.len() - resid. Without this, every
-        // short response (INQUIRY, GET_CONFIGURATION, READ_TOC, MODE_SENSE, …)
-        // leaves resid=0 (cleared by clear_status), so the client believes the
-        // full host-requested dxfer_len was transferred.
-        //
-        // Saturate the u32->i32 cast before subtracting: a dxfer_len above
-        // i32::MAX would otherwise wrap to a negative value here, matching the
-        // null path above. Latent (optical transfers stay under 2 GB), not
-        // triggerable, but keeps both paths' cast identical.
+        // Report the unfilled tail as residual (kernel sg driver semantics that
+        // libfreemkv's linux.rs relies on) — without it, short responses leave
+        // the client believing the full dxfer_len was transferred.
         self.resid = (self.dxfer_len.min(i32::MAX as u32) as i32).saturating_sub(len as i32);
     }
 }
