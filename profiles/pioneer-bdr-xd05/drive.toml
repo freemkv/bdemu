@@ -1,0 +1,32 @@
+# PIONEER BD-RW   BDR-XD05 3.01 — freemkv drive-info
+
+[drive]
+manufacturer = "PIONEER"
+product = "BD-RW   BDR-XD05"
+revision = "3.01"
+serial = "PEDL076787UC"
+firmware_date = ""
+platform = "Unknown"
+profile_matched = false
+
+[files]
+inquiry = "inquiry.bin"
+mode_2a = "mode_2a.bin"
+
+[features]
+0x0000 = "gc_0000.bin"  # Profile List
+0x0001 = "gc_0001.bin"  # Core
+0x0003 = "gc_0003.bin"  # Removable Medium
+0x0010 = "gc_0010.bin"  # Random Readable
+0x001D = "gc_001d.bin"  # Multi-Read
+0x001E = "gc_001e.bin"  # CD Read
+0x001F = "gc_001f.bin"  # DVD Read
+0x0040 = "gc_0040.bin"  # BD Read
+0x0041 = "gc_0041.bin"  # BD Write
+0x0100 = "gc_0100.bin"  # Power Management
+0x0107 = "gc_0107.bin"  # Real Time Streaming
+0x0108 = "gc_0108.bin"  # Serial Number
+0x010D = "gc_010d.bin"  # AACS
+
+[read_buffer]
+0xF1 = "rb_f1.bin"
