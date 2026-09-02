@@ -3,6 +3,10 @@ name = "bdemu"
 version = "1.6.14"
 edition = "2024"
 rust-version = "1.98"
+# OFF crates.io: bdemu git-deps freemkv-unlock (never published), so it can only
+# be built from source, not published. Marking it private also lets cargo-deny's
+# allow-wildcard-paths apply to the internal sibling deps (see deny.toml).
+publish = false
 license = "MIT"
 description = "Blu-ray Drive Emulator — LD_PRELOAD SCSI interceptor with JSON profiles"
 repository = "https://github.com/freemkv/bdemu"

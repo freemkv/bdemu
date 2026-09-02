@@ -142,6 +142,37 @@ jobs:
       - run: cargo test --tests
         working-directory: bdemu
 
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: bdemu
+      - uses: actions/checkout@v7
+        with:
+          repository: freemkv/libfreemkv
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
+          path: libfreemkv
+      - uses: actions/checkout@v7
+        with:
+          repository: freemkv/freemkv-unlock
+          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
+          path: freemkv-unlock
+      - name: Resolve siblings from their dev tips
+        shell: bash
+        working-directory: bdemu
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [patch.crates-io]
+          libfreemkv = { path = "../libfreemkv" }
+          EOF
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+          manifest-path: bdemu/Cargo.toml
+
   # What ships is a release build of the `bdemu` binary plus the cdylib
   # (release.yml packages both). `cargo test` only ever builds the dev profile,
   # and release-only link failures are real — the cdylib in particular is not
