@@ -1,6 +1,6 @@
 [package]
 name = "bdemu"
-version = "1.6.14"
+version = "1.6.15"
 edition = "2024"
 rust-version = "1.98"
 # OFF crates.io: bdemu git-deps freemkv-unlock (never published), so it can only
