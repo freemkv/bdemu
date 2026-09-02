@@ -9,52 +9,36 @@ use std::path::Path;
 
 const SECTOR_SIZE: usize = 2048;
 
-/// Print a partial-line progress label and flush it immediately. stdout is
-/// line-buffered on a TTY, so a bare `print!("  x... ")` stays buffered until
-/// the following (often slow, blocking) op finishes — defeating its purpose as
-/// a live "in progress" indicator. Flushing forces the label out now.
+// Print a partial-line progress label and flush it immediately: stdout is
+// line-buffered on a TTY, so an unflushed print! would stay hidden until the
+// following (often slow) op finishes, defeating the "in progress" indicator.
 fn print_step(msg: &str) {
     print!("{}", msg);
     let _ = std::io::stdout().flush();
 }
 
-/// Number of sectors to read in the next chunk: at most `chunk`, never more
-/// than what remains (`end - lba`). The clamp happens in u32 *before* the
-/// u16 cast so a remaining count that is a nonzero multiple of 65536 can never
-/// truncate to 0 (which would make the read loop spin forever).
+// Sectors to read next: at most `chunk`, never more than remains (end - lba).
+// Clamped in u32 before the u16 cast so a remaining count that's a nonzero
+// multiple of 65536 can't truncate to 0 (which would spin the read loop).
 fn next_chunk(lba: u32, end: u32, chunk: u16) -> u16 {
     (end - lba).min(chunk as u32) as u16
 }
 
-/// Zero the tail of a reused read buffer past the bytes actually transferred.
-///
-/// `buf` is reused across chunks, so bytes a short read did not fill still hold
-/// the previous chunk's data. After an `Ok(transferred)` read this zeroes
-/// `buf[transferred..]` so the fixture records zeros there, not stale neighbor
-/// data — matching the per-iteration `vec![0u8; ..]` semantics the buffer reuse
-/// replaced. `transferred` is clamped to `buf.len()` so a transport that
-/// over-reports the byte count cannot panic the slice.
+// See docs/capture-buffer-reuse.md — why the reused buffer's tail must be
+// re-zeroed after each short read, and why `transferred` is clamped first.
 fn zero_fill_tail(buf: &mut [u8], transferred: usize) {
     let filled = transferred.min(buf.len());
     buf[filled..].fill(0);
 }
 
 /// Capture a disc's emulation fixture from `device` (e.g. `/dev/sr0`) into
-/// `output_dir`, which is created if absent. On success the directory holds the
-/// SCSI response fixtures (INQUIRY, GET_CONFIGURATION feature dumps, MODE SENSE,
-/// READ_TOC, optional vendor pages) plus the sparse metadata sectors disc-info
-/// needs — enough for the emulator to replay the disc without the physical media.
+/// `output_dir`, which is created if absent.
 ///
-/// When `eject` is set the drive is ejected after capture so the user can swap
-/// discs (gated because eject is irreversible on slot-loading drives).
-///
-/// On a clean capture the output directory is renamed to a slugified form of the
-/// disc's UDF volume ID (with a `_N` suffix to avoid collisions).
-///
-/// An `Err` means the capture was partial or failed (bad/zero-filled sectors or a
-/// lost SCSI structure). The bytes read so far are still written to `output_dir`
-/// for inspection, but the slugified rename is skipped so an incomplete capture
-/// does not claim a clean disc name.
+/// On success the directory holds the SCSI response fixtures plus the sparse
+/// metadata sectors disc-info needs, enough to replay the disc without the
+/// physical media. If `eject` is set, the drive is ejected after capture.
+/// On a clean capture, `output_dir` is renamed to a slugified form of the
+/// disc's UDF volume ID. Returns `Err` if the capture was partial.
 pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), String> {
     let dir = Path::new(output_dir);
     fs::create_dir_all(dir).map_err(|e| format!("create dir: {}", e))?;
@@ -317,11 +301,9 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
     Ok(())
 }
 
-/// Map the capture's error counts to a result. A non-zero `read_errors` means
-/// the fixture has zero-filled (missing) sectors; a non-zero `metadata_errors`
-/// means a required SCSI structure (capacity/TOC/PFI/DI) failed for a hard
-/// reason (transport/drive fault, not "absent"). Either makes the fixture
-/// incomplete, so callers must see a non-zero exit.
+// Map the capture's error counts to a result: a non-zero `read_errors` means
+// zero-filled sectors, a non-zero `metadata_errors` means a required SCSI
+// structure failed for a hard (not "absent") reason. Either is incomplete.
 fn fixture_result(read_errors: u32, metadata_errors: u32) -> Result<(), String> {
     if read_errors > 0 {
         Err(format!(
@@ -349,17 +331,9 @@ fn slugify(name: &str) -> String {
         .to_string()
 }
 
-/// Capture one SCSI metadata structure to `filename`.
-///
-/// Returns `true` when a *required* structure failed for a reason that is NOT
-/// "structure genuinely absent". A bare `Err(_) => "n/a"` cannot tell an
-/// optional structure being missing (fine for BCA/DCB) from a hard transport
-/// or drive failure that would also break the required structures — so a
-/// capture missing required SCSI metadata used to report clean. Here:
-///   - ILLEGAL REQUEST / not-found sense  -> "n/a"   (structure absent; ok)
-///   - transport failure / other hard error -> distinct message, and for a
-///     required structure the failure is reported back so the caller can fold
-///     it into the fixture-completeness result.
+// Capture one SCSI metadata structure to `filename`; returns true on a hard
+// failure of a *required* structure. See docs/capture-scsi-save.md for the
+// required-vs-optional-absent distinction this return value encodes.
 fn scsi_save(
     session: &mut Drive,
     dir: &Path,
@@ -508,14 +482,9 @@ mod tests {
         // A large remaining count clamps to `chunk`.
         assert_eq!(next_chunk(0, 1_000_000, 32), 32);
     }
-    /// `slugify` turns a disc's UDF volume ID — a string read off an untrusted
-    /// disc — into the directory name the capture is renamed to, so it is the one
-    /// place a hostile volume ID could try to escape the output directory. It maps
-    /// every non-alphanumeric character to `_`, which makes traversal impossible
-    /// by construction (`.` and `/` cannot survive), and this test pins that
-    /// property: it catches any mutation that starts preserving separators or dots
-    /// (e.g. "allow `.` and `-` for nicer names"), which would turn
-    /// `../../etc/cron.d` into a real path again.
+    // slugify() maps a hostile untrusted UDF volume ID to the rename target
+    // dir, so every non-alphanumeric char must become `_` (traversal impossible
+    // by construction). This pins that against a "allow `.`/`-`" regression.
     #[test]
     fn slugify_cannot_produce_a_traversing_name() {
         // The traversal attempt collapses to a plain component.
@@ -533,10 +502,8 @@ mod tests {
         }
     }
 
-    /// The everyday behaviour the rename depends on: lowercasing, `_` for spaces
-    /// and punctuation, and no leading/trailing underscores (so `sample_film`, not
-    /// `_sample_film_`). Catches a mutation that drops the trim or the lowercasing
-    /// and silently changes every captured directory's name.
+    // The everyday rename behaviour: lowercasing, `_` for spaces/punctuation,
+    // no leading/trailing underscores. Catches a dropped trim or lowercasing.
     #[test]
     fn slugify_normalises_ordinary_volume_ids() {
         assert_eq!(slugify("SAMPLE FILM"), "sample_film");

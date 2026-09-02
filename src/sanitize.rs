@@ -1,11 +1,10 @@
-// bdemu — Terminal-output sanitiser, shared via `#[path = "sanitize.rs"]`
-// between the cdylib and CLI. Drive profiles are untrusted (GitHub-issue-
-// sourced); `.trim()` alone won't stop ESC sequences hiding a MISSING line.
+//! bdemu terminal-output sanitiser, shared via `#[path = "sanitize.rs"]`
+//! between the cdylib and CLI. Drive profiles are untrusted
+//! (GitHub-issue-sourced); `.trim()` alone won't stop ESC sequences.
 
-/// Replacement for a control character. A visible, non-ambiguous placeholder is
-/// better than deletion: deleting would let "PIONE\x08\x08\x08ACME" render as a
-/// plausible-looking different vendor, whereas `PIONE???ACME` shows the operator
-/// that the profile is lying to them.
+// Replacement for a control character. A visible placeholder beats deletion:
+// deleting would let "PIONE\x08\x08\x08ACME" render as a plausible different
+// vendor, whereas `PIONE???ACME` shows the operator the profile is lying.
 const REPLACEMENT: char = '?';
 
 /// Make a profile-derived (or otherwise untrusted) string safe to print to a
@@ -40,10 +39,9 @@ mod tests {
         assert_eq!(clean, "BDR?[2J?]0;pwned?");
     }
 
-    /// Catches a filter that only handles ESC: newline injection would let a
-    /// single profile field forge extra `validate` report lines (e.g. a fake
-    /// "✓ sectors.bin" under a disc that has none), and DEL/C1 carry the same
-    /// escape semantics as ESC on many terminals.
+    // Catches a filter that only handles ESC: newline injection would let a
+    // single profile field forge extra `validate` report lines, and DEL/C1
+    // carry the same escape semantics as ESC on many terminals.
     #[test]
     fn newlines_del_and_c1_are_neutralised() {
         assert_eq!(sanitize_for_terminal("a\nb\r\tc"), "a?b??c");

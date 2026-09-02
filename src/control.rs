@@ -82,25 +82,9 @@ pub struct EmulatorState {
     pub disc: DiscState,
 }
 
-/// Make `path` free to bind, WITHOUT stealing a socket somebody is using.
-///
-/// The unconditional `let _ = std::fs::remove_file(&path)` this replaces was how
-/// two concurrent `bdemu run` instances (two emulated drives, or two CI-matrix
-/// jobs sharing a runner) silently took each other's control socket: the second
-/// emulator unlinked the first's inode, the first went on accepting on a socket
-/// no path pointed at any more, and every later `bdemu load` / `eject` / `status`
-/// reached the SECOND emulator and answered OK. Nothing failed, so nothing was
-/// noticed — the disc the operator thought they loaded was loaded into the other
-/// drive.
-///
-/// A socket with a live listener answers `connect(2)`; one left behind by a
-/// crashed emulator answers ECONNREFUSED. So: refuse loudly on a live peer (and
-/// point the operator at `BDEMU_INSTANCE` for running a second emulator), and
-/// only reclaim a socket that is provably dead. This is detect-and-refuse, not a
-/// lock: a competing instance could still bind between our probe and our bind,
-/// but that residual race fails loudly at `bind` (EADDRINUSE) instead of stealing
-/// silently, and the collision it does close — an emulator already running — is
-/// the one that actually happens.
+// Make `path` free to bind, WITHOUT stealing a socket somebody is using:
+// refuse loudly on a live peer, only reclaim a provably dead one.
+// See docs/control-socket-reclaim.md — why the old unconditional unlink was unsafe.
 fn reclaim_socket_path(path: &std::path::Path) -> Result<(), String> {
     if std::fs::symlink_metadata(path).is_err() {
         // Nothing there: the ordinary first-instance case.
@@ -361,10 +345,9 @@ fn cmd_load(
     Response::ok(&format!("loaded '{}' ({} sectors)", name, sector_count))
 }
 
-/// Logical sector count of a loaded disc. For Blu-ray Disc Sector Map (BDSM)
-/// sparse images `sectors` also holds the 12-byte header + range table, so
-/// dividing the raw length by 2048 over-counts; sum the range counts instead.
-/// Flat images have an empty map and fall back to length/2048.
+// Logical sector count of a loaded disc. BDSM sparse images' `sectors` also
+// holds a 12-byte header + range table, so raw length/2048 over-counts; sum
+// the range counts instead. Flat images have an empty map, use length/2048.
 fn disc_sector_count(d: &crate::profile::DiscProfile) -> usize {
     if d.sector_map.is_empty() {
         if !d.sectors.len().is_multiple_of(SECTOR_SIZE) {
@@ -508,11 +491,9 @@ mod tests {
         );
     }
 
-    /// Every control verb must reach its handler through parse_command +
-    /// handle_client over a real socket — previously only `status` was exercised
-    /// end-to-end, so a mutation to any other dispatch arm (routing `eject` to the
-    /// unknown-command path, say) would go unnoticed. eject/load touch the
-    /// process-global media-change flag, so serialize against the SCSI tests.
+    // Every control verb must reach its handler through parse_command +
+    // handle_client over a real socket, not just `status`. eject/load touch
+    // the process-global media-change flag, so serialize against SCSI tests.
     #[test]
     fn dispatch_routes_every_verb_end_to_end() {
         let _g = crate::scsi::TEST_GUARD
@@ -572,11 +553,9 @@ mod tests {
         dir
     }
 
-    /// Catches the mutation that restores the unconditional
-    /// `let _ = std::fs::remove_file(&path)` before bind: a second emulator would
-    /// unlink a LIVE socket, leaving the first emulator accepting on an inode no
-    /// path reaches while every later `bdemu load`/`eject` silently addressed the
-    /// second one.
+    // Catches a regression to the unconditional unlink-before-bind: a second
+    // emulator would steal a LIVE socket out from under the first.
+    // See docs/control-socket-reclaim.md.
     #[test]
     fn a_live_control_socket_is_never_stolen() {
         let dir = test_scratch_dir("ctl_live");
@@ -619,13 +598,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// End-to-end coverage of the two mutating control verbs over a real socket
-    /// pair, which nothing exercised before: `load` must resolve a disc under the
-    /// profile's `discs/` directory, swap it into the live profile, report the
-    /// sector count and arm the media-change flag the SCSI layer reports as a UNIT
-    /// ATTENTION; `eject` must clear it again. Catches a `load` that answers OK
-    /// without actually swapping the disc in (the state and the profile going out
-    /// of sync is exactly the drift `DiscState` exists to prevent).
+    // End-to-end coverage of the two mutating control verbs: `load` must resolve
+    // a disc, swap it into the live profile, and arm the media-change flag;
+    // `eject` must clear it. Catches a `load` that answers OK without swapping.
     #[test]
     fn load_then_eject_round_trip() {
         // cmd_load / cmd_eject set the process-global media-change flag the SCSI
@@ -695,11 +670,9 @@ mod tests {
         assert_eq!(resp.lines, vec!["ERR usage: load <disc_name>".to_string()]);
     }
 
-    /// A `sectors.bin` whose length is not a whole multiple of `SECTOR_SIZE`
-    /// (a truncated capture) must not panic or silently round up: the count is
-    /// truncated toward whole sectors and a diagnostic is logged. Also covers
-    /// the BDSM sparse-map branch, which sums range counts instead of dividing
-    /// the raw byte length.
+    // A truncated `sectors.bin` (not a whole multiple of SECTOR_SIZE) must not
+    // panic or silently round up: truncate toward whole sectors and log.
+    // Also covers the BDSM sparse-map branch (sums ranges, not raw length).
     #[test]
     fn disc_sector_count_covers_flat_truncation_and_sparse_sum() {
         let flat = crate::profile::DiscProfile {
@@ -785,10 +758,9 @@ mod tests {
     /// otherwise race against each other under parallel test threads.
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// `start_listener` with no usable socket path (here: `XDG_RUNTIME_DIR`
-    /// unset) must log and return, not panic — it runs from the `STATE` `Lazy`
-    /// init ahead of the `extern "C" fn ioctl` catch_unwind, so a panic here
-    /// would unwind across the C boundary.
+    // `start_listener` with no usable socket path (XDG_RUNTIME_DIR unset) must
+    // log and return, not panic: it runs ahead of the `ioctl` catch_unwind,
+    // so a panic here would unwind across the C boundary.
     #[test]
     fn start_listener_disabled_when_socket_path_unavailable() {
         let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -808,13 +780,9 @@ mod tests {
         }
     }
 
-    /// `start_listener` with a RESOLVABLE socket path (unlike the test above)
-    /// but a live peer already occupying it must hit the in-`start_listener`
-    /// `reclaim_socket_path` refusal (log + return) rather than trying to bind
-    /// — this is the `socket_path()` success arm the test above cannot reach.
-    /// Deliberately does not exercise the real bind/umask path below it: umask
-    /// is process-global, and toggling it here would race every other test's
-    /// concurrent file creation in the same process.
+    // `start_listener` with a resolvable path but a live peer already on it
+    // must hit the `reclaim_socket_path` refusal, not try to bind. Skips the
+    // real bind/umask path: umask is process-global, would race other tests.
     #[test]
     fn start_listener_disabled_when_path_already_has_a_live_peer() {
         let _g = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -854,11 +822,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `list-discs` writes directory names into a newline-delimited protocol that
-    /// the CLI prints straight to a terminal, and profiles come from strangers.
-    /// Catches the mutation that drops the sanitiser: an ESC in a disc directory
-    /// name would repaint the operator's screen, and an embedded newline would
-    /// forge an extra response line.
+    // `list-discs` writes directory names into a newline-delimited protocol the
+    // CLI prints to a terminal, and profiles come from strangers. Catches a
+    // dropped sanitiser: an ESC could repaint the screen, a newline forge a line.
     #[test]
     fn list_discs_sanitises_hostile_directory_names() {
         let dir = test_scratch_dir("ctl_list_discs");
