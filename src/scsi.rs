@@ -549,7 +549,7 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
 
 /// Allocation size for the READ_BUFFER unlock response: host-requested
 /// `dxfer_len` (untrusted u32) clamped to 64 bytes, since the unlock reply
-/// only populates bytes [0:4] and [12:16] — never an OOM-sized alloc.
+/// only populates bytes `[0:4]` and `[12:16]` — never an OOM-sized alloc.
 fn unlock_resp_len(dxfer_len: u32) -> usize {
     (dxfer_len as usize).min(64)
 }
