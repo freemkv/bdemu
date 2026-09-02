@@ -32,13 +32,9 @@ fn call() -> u32 {
     CALL_NUM.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
 }
 
-/// Whether SCSI command logging is suppressed.
-///
-/// BDEMU_QUIET is read exactly once and cached. The logger runs at least once per
-/// SCSI command — including READ(10)/READ(12) for every 2048-byte sector of a
-/// rip — and std::env::var acquires the process-wide environment lock on each
-/// call, which would serialize the hottest path in the emulator. The env is
-/// fixed for the process lifetime, so a one-shot OnceLock is correct.
+// Whether SCSI command logging is suppressed (BDEMU_QUIET). Cached in a
+// OnceLock since std::env::var takes a process-wide lock and this runs on
+// every SCSI command, including the hot READ(10)/READ(12) sector path.
 fn quiet() -> bool {
     static QUIET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *QUIET.get_or_init(|| std::env::var("BDEMU_QUIET").is_ok())
@@ -50,14 +46,9 @@ fn log(num: u32, msg: &str) {
     }
 }
 
-/// Logging variant that builds its message only if it will actually be printed.
-///
-/// `log(n, &format!(...))` formats eagerly: the String is allocated and written
-/// even under BDEMU_QUIET, where it is then dropped unused. For the handful of
-/// commands a session issues once (INQUIRY, GET_CONFIGURATION, MODE SENSE, …)
-/// that is free. READ(10)/READ(12) is different — it is the emulator's hot path,
-/// issued once per transfer for the whole length of a rip — so its log lines take
-/// a closure and cost nothing when quiet.
+// Logging variant that only builds its message if it will be printed.
+// `log(n, &format!(...))` formats eagerly even under BDEMU_QUIET; that's fine
+// for one-shot commands but wasteful on the hot READ(10)/READ(12) path.
 fn log_lazy(num: u32, msg: impl FnOnce() -> String) {
     if !quiet() {
         eprintln!("  [{:3}] {}", num, msg());
@@ -556,10 +547,9 @@ fn cmd_write_buffer(hdr: &mut SgIoHdr, n: u32) {
 // Implements modes 2 (data), 3 (descriptor), 6 (vendor MTK reg, empty-GOOD),
 // plus unlock shapes. Mode 0 deliberately NOT implemented (no captured payload).
 
-/// Allocation size for the READ_BUFFER unlock response: the host-requested
-/// `dxfer_len` clamped to 64 bytes. `dxfer_len` is an untrusted u32 from the
-/// CDB; the unlock reply only populates bytes \[0:4\] and \[12:16\], so 64 is
-/// ample and a hostile huge length can never drive an OOM allocation here.
+/// Allocation size for the READ_BUFFER unlock response: host-requested
+/// `dxfer_len` (untrusted u32) clamped to 64 bytes, since the unlock reply
+/// only populates bytes `[0:4]` and `[12:16]` — never an OOM-sized alloc.
 fn unlock_resp_len(dxfer_len: u32) -> usize {
     (dxfer_len as usize).min(64)
 }
@@ -1083,12 +1073,9 @@ mod tests {
         }
     }
 
-    /// A pending media-change UNIT ATTENTION must survive an intervening
-    /// INQUIRY (0x12) — INQUIRY does not clear UA per SPC — and then be
-    /// delivered as CHECK CONDITION to the next real command. The old
-    /// `swap(..) && ...` form consumed the flag on the INQUIRY itself, so the
-    /// UA was silently lost. Tests run serially via a mutex because MEDIA_CHANGED
-    /// is process-global.
+    // A pending UA must survive an intervening INQUIRY (INQUIRY doesn't clear
+    // UA per SPC) and be delivered as CHECK CONDITION to the next real
+    // command. The old `swap(..) && ...` form consumed the flag on INQUIRY.
     #[test]
     fn unit_attention_survives_inquiry() {
         // Serialize against other tests touching the global flag.
@@ -1155,10 +1142,9 @@ mod tests {
         p
     }
 
-    /// GET EVENT STATUS NOTIFICATION must report NewMedia (0x02) only ONCE after
-    /// a media change (the MMC-6 edge event), then NoChange (0x00) on every
-    /// subsequent poll. Returning 0x02 on every poll makes hosts re-enumerate the
-    /// disc each time. resp[5] stays 0x02 (door closed, media present) throughout.
+    // GET EVENT must report NewMedia (0x02) only ONCE after a media change
+    // (the MMC-6 edge event), then NoChange (0x00) on every later poll —
+    // else hosts re-enumerate the disc each poll. resp[5] stays media-present.
     #[test]
     fn get_event_new_media_is_edge_triggered() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1230,11 +1216,9 @@ mod tests {
         assert_eq!(d2[13], 0x00, "ASCQ must be cleared after first report");
     }
 
-    /// A bare REQUEST SENSE issued BEFORE any real command must report (and
-    /// clear) a pending media-change UNIT ATTENTION. handle_scsi exempts
-    /// REQUEST SENSE from the UA-consuming swap, so without the explicit
-    /// MEDIA_CHANGED check in cmd_request_sense this path reported "no sense"
-    /// while a UA was actually pending (SPC-4 §6.27).
+    // A bare REQUEST SENSE (before any other command) must report and clear a
+    // pending media-change UA. handle_scsi exempts REQUEST SENSE from the UA-
+    // consuming swap, so cmd_request_sense needs its own MEDIA_CHANGED check.
     #[test]
     fn request_sense_reports_pending_media_change_ua() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1276,13 +1260,9 @@ mod tests {
         );
     }
 
-    /// lookup_sector binary-searches the sector map and so depends on it being
-    /// sorted ascending by start_lba — which parse_sector_file now guarantees.
-    /// Build a map exactly as parse_sector_file would emit for a capture whose
-    /// ranges were written OUT of LBA order, and confirm every present sector
-    /// resolves to the correct byte offset (and absent sectors return None).
-    /// Pre-sort regression: a file-order (unsorted) map made binary_search
-    /// return Err for present sectors, silently zero-filling them.
+    // lookup_sector binary-searches the map, which depends on it being sorted
+    // ascending by start_lba (parse_sector_file guarantees this). An unsorted,
+    // file-order map made binary_search miss present sectors, zero-filling them.
     #[test]
     fn lookup_sector_resolves_out_of_order_capture() {
         let bdsm = {
@@ -1322,11 +1302,9 @@ mod tests {
         assert_eq!(lookup_sector(&map, 1002), None);
     }
 
-    /// The READ_BUFFER unlock response must NOT be sized from the raw,
-    /// untrusted `dxfer_len`: a hostile huge value would `vec![0u8; ~4 GiB]`
-    /// and OOM-abort the emulator. The clamp caps the allocation at 64 bytes
-    /// (the unlock reply only touches [0:4] and [12:16]), while still serving a
-    /// normal small request exactly.
+    // The unlock response must not size its allocation from raw, untrusted
+    // `dxfer_len` — a hostile huge value would OOM-abort. Clamped to 64 bytes
+    // (the reply only touches [0:4]/[12:16]), while small requests pass through.
     #[test]
     fn unlock_resp_len_clamps_hostile_dxfer_len() {
         // A hostile multi-GB transfer length must be clamped to 64 bytes —
@@ -1356,11 +1334,9 @@ mod tests {
         panic!("the unlocker must recognise at least one unlock READ_BUFFER CDB");
     }
 
-    /// End-to-end: a unlock READ_BUFFER with a normal 64-byte transfer produces
-    /// the unlock marker at [12:16] (signature is [0;4] since empty_profile
-    /// matches no bundled profile). Confirms the clamped path still serves a
-    /// real request — `dxfer_len` here equals the host buffer, the kernel
-    /// invariant write_response relies on.
+    // End-to-end: an unlock READ_BUFFER with a normal 64-byte transfer
+    // produces the unlock marker at [12:16], confirming the clamped path
+    // still serves a real request (dxfer_len here equals the host buffer).
     #[test]
     fn read_buffer_unlock_writes_marker() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1387,9 +1363,8 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// Build a profile whose disc carries a BDSM sparse capture of `ranges`,
-    /// with every captured byte set to `fill`. Goes through the real
-    /// `parse_sector_file` so the map the READ handler sees is exactly the one a
-    /// captured `sectors.bin` would produce.
+    /// all bytes set to `fill`. Goes through the real `parse_sector_file` so
+    /// the map matches what an actual captured `sectors.bin` would produce.
     fn sparse_disc_profile(ranges: &[(u32, u32)], fill: u8) -> LoadedProfile {
         let mut file = Vec::new();
         file.extend_from_slice(b"BDSM");
@@ -1445,13 +1420,9 @@ mod tests {
         (status, data, sense)
     }
 
-    /// THE defect: a READ that the fixture cannot satisfy must not come back as
-    /// GOOD with a zero-filled buffer. Catches the mutation that restores the
-    /// single fall-through `hdr.write_response(&data)` for all three branches —
-    /// with that mutation the host receives 2048 zero bytes at status 0x00 and a
-    /// log line identical to a real hit, so `discs/<n>/sectors.bin` being absent
-    /// (or unreadable) reads as genuine disc content and a broken acquisition
-    /// passes CI green.
+    // A READ the fixture cannot satisfy must not return GOOD with zero-filled
+    // data. Catches the mutation that restores a single fall-through
+    // `write_response(&data)` for all branches, masking a missing sectors.bin as real disc content.
     #[test]
     fn read10_with_no_captured_sectors_is_check_condition_not_zeros() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1475,11 +1446,9 @@ mod tests {
         );
     }
 
-    /// The other half of the same distinction: a sector that IS inside a captured
-    /// BDSM range is authoritative, so it is served at GOOD — including when its
-    /// contents are genuinely zero. Catches an over-broad fix that failed any read
-    /// whose bytes happen to be zero (which would break every legitimately blank
-    /// region of a real disc).
+    // A sector inside a captured BDSM range is authoritative and served at
+    // GOOD even when its contents are genuinely zero. Catches an over-broad
+    // fix that failed any all-zero read, breaking legitimately blank disc regions.
     #[test]
     fn read10_captured_zero_sector_is_served_as_good() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1513,10 +1482,9 @@ mod tests {
         );
     }
 
-    /// A sector OUTSIDE every captured range was never read off the medium, so it
-    /// must fail — even though the disc is loaded and other sectors are present.
-    /// This is the everyday case: a capture whose sparse map does not cover the
-    /// LBA freemkv asks for.
+    // A sector outside every captured range was never read off the medium,
+    // so it must fail even though the disc is loaded and other sectors are
+    // present — the everyday case of a sparse map that doesn't cover the LBA.
     #[test]
     fn read10_outside_the_captured_map_is_check_condition() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1584,10 +1552,9 @@ mod tests {
         assert_eq!(sense[12], 0x11);
     }
 
-    /// A failed read must also be reportable through REQUEST SENSE: the miss path
-    /// uses the same `save_sense` seam as every other error path, so a host that
-    /// polls sense separately sees the same MEDIUM ERROR. Catches a fix that set
-    /// the header status but forgot to latch the sense.
+    // A failed read must also be reportable through REQUEST SENSE: the miss
+    // path uses the same `save_sense` seam as every other error path.
+    // Catches a fix that set the header status but forgot to latch the sense.
     #[test]
     fn read_miss_is_visible_to_request_sense() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1605,10 +1572,9 @@ mod tests {
         assert_eq!(rs_data[12], 0x11, "…with UNRECOVERED READ ERROR");
     }
 
-    /// An unimplemented READ BUFFER mode (mode 0 among them — the header comment
-    /// used to claim it was implemented) must be ILLEGAL REQUEST, not an empty
-    /// GOOD. Catches the mutation that restores `hdr.write_response(&[])` in the
-    /// catch-all arm, which told the host "this buffer really is zero bytes long".
+    // An unimplemented READ BUFFER mode (e.g. mode 0) must be ILLEGAL
+    // REQUEST, not empty GOOD. Catches the mutation that restores
+    // `write_response(&[])` in the catch-all arm, falsely claiming a zero-byte buffer.
     #[test]
     fn read_buffer_unimplemented_mode_is_illegal_request() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1636,14 +1602,9 @@ mod tests {
         assert_eq!(sense[12], 0x24, "ASC must be INVALID FIELD IN CDB");
     }
 
-    /// MED (round-2): the sparse READ path computed `lba.wrapping_add(i)`, so a
-    /// READ(12) near the top of the u32 LBA space (lba=0xFFFFFFFE, count=4) wrapped
-    /// its out-of-range tail back to LBAs 0/1 and served THAT data at GOOD as if it
-    /// were the requested high sectors. Here the capture covers both the top of the
-    /// address space (so 0xFFFFFFFE/0xFFFFFFFF hit) and the bottom (LBAs 0/1, the
-    /// wrap targets); with the wrapping bug all four requested sectors resolve to a
-    /// hit and the read returns GOOD, whereas the true LBAs past u32::MAX have no
-    /// sector and must be a miss. Catches the mutation that restores wrapping_add.
+    // The sparse READ path computed `lba.wrapping_add(i)`, so a READ(12) near
+    // the top of u32 LBA space wrapped its out-of-range tail back to LBA 0/1
+    // and served that as GOOD. LBAs past u32::MAX must miss. Catches wrapping_add.
     #[test]
     fn read12_lba_past_u32_max_is_a_miss_not_a_wrapped_hit() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1664,11 +1625,9 @@ mod tests {
         );
     }
 
-    /// MED (round-2): a `sector_data.bin` SHORTER than one 2048-byte sector is a
-    /// truncated capture. The single-pattern branch used to copy the short bytes
-    /// and leave the sector's tail zero-filled, returning it at GOOD with a log
-    /// identical to a genuine hit — the "failure that looks like success" class in
-    /// the one read branch the round-1 fix didn't touch. It must now be a miss.
+    // A `sector_data.bin` shorter than one 2048-byte sector is a truncated
+    // capture. The single-pattern branch used to copy the short bytes and
+    // zero-fill the tail, returning GOOD like a genuine hit; it must now miss.
     #[test]
     fn read10_short_sector_data_pattern_is_a_miss_not_zero_padded() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1712,12 +1671,9 @@ mod tests {
         );
     }
 
-    /// MED (round-2), end-to-end: a hostile sectors.bin whose BDSM range table
-    /// OVERLAPS must serve NOTHING — a READ of LBA 0 must MISS (CHECK CONDITION),
-    /// never hand the host the discarded file's "BDSM"+header bytes as sector 0 at
-    /// GOOD. parse_sector_file discards the sectors for an overlapping BDSM; this
-    /// proves the READ path then answers a miss. Catches the mutation that kept the
-    /// file bytes (`(data, Vec::new())`) so the flat branch served the header.
+    // A hostile sectors.bin with an overlapping BDSM range table must serve
+    // NOTHING (miss), never the discarded file's header bytes as sector 0 at
+    // GOOD. Catches the mutation that kept file bytes instead of discarding them.
     #[test]
     fn read10_overlapping_capture_serves_nothing_not_header() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1753,11 +1709,9 @@ mod tests {
         );
     }
 
-    /// LOW (round-2): READ BUFFER mode 6 (MTK register read) is a DELIBERATE
-    /// empty-GOOD — the drive answers status GOOD with no payload. It must NOT be
-    /// mistaken for the "empty GOOD is a lie" antipattern and turned into an
-    /// ILLEGAL REQUEST (which would break the MTK handshake). Pins the carve-out so
-    /// a mutation that folds mode 6 into the unimplemented catch-all is caught.
+    // READ BUFFER mode 6 (MTK register read) is a deliberate empty-GOOD
+    // (status GOOD, no payload) and must not be turned into ILLEGAL REQUEST,
+    // which would break the MTK handshake. Pins the carve-out against a catch-all mutation.
     #[test]
     fn read_buffer_mode6_is_deliberate_empty_good() {
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());

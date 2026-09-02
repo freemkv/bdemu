@@ -22,7 +22,7 @@ Or build from source: `cargo build --release`
 bdemu capture-disc /dev/sr0 ./testbed/disc
 
 # Emulate a drive and scan the captured disc
-bdemu run --profile profiles/bu40n --disc my_movie -- freemkv info disc://
+bdemu run --profile profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 --disc my_movie -- freemkv info disc://
 ```
 
 ## Commands
@@ -43,8 +43,8 @@ Control (while emulator is running):
 
 Examples:
   bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names (add --eject to eject)
-  bdemu run -p profiles/bu40n -d sample -- freemkv info disc://
-  bdemu validate profiles/bu40n/
+  bdemu run -p profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 -d sample -- freemkv info disc://
+  bdemu validate profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000/
 ```
 
 ## Smart Capture
