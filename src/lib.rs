@@ -93,11 +93,9 @@ static REAL_IOCTL: Lazy<Option<RealIoctl>> = Lazy::new(|| unsafe {
     Some(std::mem::transmute::<*mut libc::c_void, RealIoctl>(ptr))
 });
 
-/// Forward to the real libc `ioctl`, or fail with EINVAL if dlsym never found
-/// it. Never panics.
-///
-/// # Safety
-/// Same contract as libc `ioctl`: `arg` must be valid for `request`.
+// Forward to the real libc `ioctl`, or fail with EINVAL if dlsym never found
+// it. Never panics. Safety: same contract as libc `ioctl` — `arg` must be
+// valid for `request`.
 unsafe fn forward_ioctl(
     fd: libc::c_int,
     request: libc::c_ulong,

@@ -108,6 +108,12 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
             }
         }
 
+        // A BDSM file declaring zero ranges captured no sectors. Return empty
+        // rather than the raw buffer — otherwise scsi.rs mistakes the empty
+        // map for a legacy flat dump and serves the header bytes as sector 0.
+        if map.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
         (data, map)
     } else {
         // Legacy flat format
@@ -516,30 +522,14 @@ pub fn load_disc(dir: &Path) -> DiscProfile {
     }
 }
 
-/// Hard ceiling on a single profile blob slurped into memory. sectors.bin is the
-/// largest file (a whole disc image) and a real UHD BD-ROM tops out near 100 GB,
-/// but bdemu profiles are test fixtures, not full-disc images — a profile that
-/// large is a mistake (or a hostile/corrupt fixture), and `fs::read` would slurp
-/// the whole thing into one Vec and OOM the process. Cap it.
+// Cap a single profile blob read into memory: bdemu profiles are test
+// fixtures, not full-disc images, so a sectors.bin near real-disc size is a
+// mistake (or hostile fixture) that `fs::read` would otherwise OOM on.
 const MAX_BIN_BYTES: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
-/// Read a profile blob into memory, refusing files past `MAX_BIN_BYTES`.
-///
-/// Returns `Ok(empty)` for a blob that is genuinely ABSENT — callers treat an
-/// empty Vec as "this feature is not present in the profile", and profiles
-/// legitimately omit rpc_state.bin, mode_2a.bin, sector_data.bin and so on.
-/// Every OTHER failure (EACCES, EIO, a directory where a file was expected, an
-/// oversized blob) returns `Err` with a message the caller logs.
-///
-/// That split is the whole point. The previous `_ => fs::read(path)
-/// .unwrap_or_default()` collapsed EVERY error into an empty Vec with no log, so
-/// an unreadable `discs/<n>/sectors.bin` was indistinguishable from a profile
-/// that simply has no sectors — and READ(10) then served 2048 zero bytes per
-/// sector at GOOD status. A rip could complete "successfully" against a profile
-/// the process could not actually read. Only the >16 GiB case was ever logged.
-///
-/// Stat first so an oversized (or hostile) file is rejected before the
-/// allocation, rather than `fs::read` growing an unbounded Vec to OOM.
+// Read a profile blob, refusing files past MAX_BIN_BYTES. Ok(empty) means
+// "genuinely absent"; every other failure is Err so it gets logged.
+// See docs/profile-loader.md — read_bin_reported.
 fn read_bin_reported(path: &Path) -> Result<Vec<u8>, String> {
     match fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_BIN_BYTES => Err(format!(
@@ -562,11 +552,9 @@ fn read_bin_reported(path: &Path) -> Result<Vec<u8>, String> {
     }
 }
 
-/// `read_bin_reported` with the failure logged and mapped to the empty-Vec
-/// "not present" convention every caller already understands. The log is the
-/// contract: a blob that failed to load for any reason other than absence must
-/// leave a trace, so a zero-filled read later in the session can be traced back
-/// to its cause instead of looking like genuine disc content.
+// `read_bin_reported` with the failure logged and mapped to the empty-Vec
+// "not present" convention every caller already understands, so a non-absence
+// failure leaves a trace instead of looking like genuine disc content.
 fn read_bin(path: &Path) -> Vec<u8> {
     match read_bin_reported(path) {
         Ok(data) => data,
@@ -577,11 +565,9 @@ fn read_bin(path: &Path) -> Vec<u8> {
     }
 }
 
-/// True when `name` is a single plain path component safe to join onto the
-/// profile directory: non-empty, no path separator, no NUL, and not a `.`/`..`
-/// traversal component. Kept separate from the filesystem access so the policy
-/// is unit-testable. (An ordinary `.` *inside* a filename — `inquiry.bin` — is
-/// fine; only the whole-string `.`/`..` components are rejected.)
+// True when `name` is a single plain path component safe to join onto the
+// profile directory: non-empty, no separator/NUL, not a `.`/`..` traversal
+// component. (A `.` inside a filename, e.g. `inquiry.bin`, is fine.)
 fn is_contained_blob_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
@@ -591,27 +577,9 @@ fn is_contained_blob_name(name: &str) -> bool {
         && name != ".."
 }
 
-/// Read a profile blob whose FILENAME came from the (untrusted) `drive.toml`,
-/// enforcing that it names a file directly inside the profile directory.
-///
-/// `drive.toml`'s `[files]`, `[features]` and `[read_buffer]` values are
-/// filenames chosen by whoever authored the profile — and profiles are
-/// THIRD-PARTY UNTRUSTED artifacts shared through the documented GitHub-issue
-/// workflow (SCHEMA.md / profile-from-issue.yml turns an issue body into one of
-/// these directories). The previous `read_bin(&dir.join(&name))` joined them raw,
-/// so a hostile profile could set `inquiry = "../../../../etc/shadow"`
-/// (or any absolute path) and bdemu would read that file and serve its bytes back
-/// as the emulated INQUIRY / feature / read-buffer response — an arbitrary
-/// local-file read surfaced over SCSI and into the logs. Round 1 added
-/// `safe_disc_dir` containment for the disc DIRECTORY name but left this
-/// blob-name sibling raw; this is the same containment for it.
-///
-/// A profile blob is always a plain filename beside `drive.toml` (SCHEMA.md shows
-/// flat `inquiry.bin`, `gc_0108.bin`, … and the loader itself writes fixed
-/// basenames such as `mode_2a.bin`), so a name that is empty, absolute, contains
-/// a separator/NUL, or is a `.`/`..` component is rejected. A rejected name is
-/// LOGGED (absence of a log is a bug) and mapped to the empty/"not present" blob
-/// every caller already understands — it is never opened.
+// Read a profile blob whose FILENAME came from the untrusted `drive.toml`,
+// enforcing it names a plain file inside the profile directory, not a path
+// escape. See docs/profile-loader.md — read_blob.
 fn read_blob(dir: &Path, name: &str) -> Vec<u8> {
     if is_contained_blob_name(name) {
         read_bin(&dir.join(name))
@@ -639,14 +607,9 @@ fn parse_hex(hex: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Parse the right-hand side of a `key = value` TOML line into the bare value.
-///
-/// Strips an optional surrounding pair of double quotes and a trailing `#`
-/// comment — but only a `#` that appears OUTSIDE the quoted value. The previous
-/// inline `split('#').next()` truncated unconditionally, so a legitimate value
-/// like `product = "BDR-#1"` or `inquiry = "file#2.bin"` was silently cut to
-/// `BDR-` / `file`. Here a quoted value keeps everything up to its closing quote
-/// verbatim; an unquoted value is comment-stripped at the first `#`.
+// Parse the right-hand side of a `key = value` TOML line: strips an optional
+// surrounding pair of double quotes and a trailing `#` comment, but only a
+// `#` OUTSIDE the quotes — so `product = "BDR-#1"` keeps its `#1`.
 fn parse_toml_value(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(rest) = trimmed.strip_prefix('"') {
@@ -683,11 +646,9 @@ mod tests {
         read_bin_reported, safe_disc_dir,
     };
 
-    /// A per-test scratch directory under the crate's `target/` (never /tmp, per
-    /// the project no-/tmp scratch rule). CARGO_MANIFEST_DIR is always set at
-    /// compile time, so this resolves to `<crate>/target/test-scratch/<tag>`,
-    /// which `cargo clean` reclaims. The directory is created (and any stale
-    /// prior contents removed) before returning.
+    // A per-test scratch directory under the crate's `target/` (never /tmp, per
+    // the project no-/tmp scratch rule), created fresh (stale contents removed)
+    // at `<crate>/target/test-scratch/<tag>`, which `cargo clean` reclaims.
     fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -737,6 +698,21 @@ mod tests {
         v.extend_from_slice(&1u32.to_le_bytes());
         v.extend_from_slice(&num_ranges.to_le_bytes());
         v
+    }
+
+    #[test]
+    fn zero_ranges_serves_nothing_not_the_header() {
+        // A BDSM file declaring 0 ranges (with trailing padding) captured no
+        // sectors: it must serve nothing, not fall through to a flat dump that
+        // hands the header + padding back as sector 0 at GOOD status.
+        let mut data = bdsm_header(0);
+        data.extend_from_slice(&[0xAB; 2048]);
+        let (sectors, map) = parse_sector_file(data);
+        assert!(map.is_empty());
+        assert!(
+            sectors.is_empty(),
+            "a 0-range BDSM must serve no sectors, not its header/padding as sector 0",
+        );
     }
 
     #[test]
@@ -922,14 +898,9 @@ mod tests {
         // Exactly one feature survived.
         assert_eq!(profile.features.len(), 1);
     }
-    /// A blob that is genuinely absent is the documented "feature not present"
-    /// case and stays silent, but every OTHER read failure must be reported.
-    ///
-    /// Catches the mutation that restores `_ => fs::read(path).unwrap_or_default()`:
-    /// with it, an unreadable `sectors.bin` (EACCES, EIO, or — as exercised here —
-    /// a directory where a file was expected) returns an empty Vec with no log and
-    /// is indistinguishable from a profile that simply has no sectors. That was
-    /// the direct enabler of READ(10) serving zeros at GOOD status.
+    // A genuinely absent blob is the documented "feature not present" case and
+    // stays silent, but every OTHER read failure (e.g. a directory where a file
+    // was expected) must return Err, not an indistinguishable empty Vec.
     #[test]
     fn unreadable_blob_is_reported_while_absent_blob_is_silent() {
         let dir = test_scratch_dir("read_bin_reported");
@@ -959,11 +930,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A profile directory holding only `drive.toml` — every binary blob missing —
-    /// must still load, with each absent blob presenting as empty rather than
-    /// failing the whole profile or panicking on a missing file. This is the
-    /// coverage gap for `LoadedProfile::load` on an incomplete profile (the shape
-    /// `bdemu validate` exists to warn about).
+    // A profile directory holding only `drive.toml` — every binary blob missing —
+    // must still load, with each absent blob presenting as empty rather than
+    // failing the whole profile or panicking on a missing file.
     #[test]
     fn profile_loads_with_every_blob_missing() {
         let dir = test_scratch_dir("profile_missing_blobs");
@@ -991,10 +960,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The lexical containment guard for profile blob filenames. Names that are a
-    /// plain filename (even with dots) are accepted; anything that could escape
-    /// the profile directory is rejected. Catches a mutation that drops any of the
-    /// separator / traversal-component checks.
+    // The lexical containment guard for profile blob filenames: a plain filename
+    // (even with dots) is accepted; anything that could escape the profile
+    // directory is rejected.
     #[test]
     fn contained_blob_name_accepts_plain_files_rejects_escapes() {
         assert!(is_contained_blob_name("inquiry.bin"));
@@ -1012,13 +980,9 @@ mod tests {
         assert!(!is_contained_blob_name("a\0b.bin"), "nul byte");
     }
 
-    /// HIGH (round-2): a profile is an untrusted artifact from the GitHub-issue
-    /// workflow, so a hostile `drive.toml` that points a blob filename OUTSIDE the
-    /// profile directory (`inquiry = "../secret.bin"`) must NOT cause bdemu to read
-    /// that file and serve its bytes as the emulated INQUIRY / feature / rpc /
-    /// read-buffer response. Catches the mutation that restores the raw
-    /// `read_bin(&dir.join(&name))` on any of those blob-name paths (round-1
-    /// hardened only the disc-directory name via safe_disc_dir).
+    // A hostile `drive.toml` that points a blob filename OUTSIDE the profile
+    // directory (`inquiry = "../secret.bin"`) must NOT cause bdemu to read that
+    // file and serve its bytes as the emulated INQUIRY / feature / rpc response.
     #[test]
     fn blob_filenames_cannot_escape_the_profile_directory() {
         let root = test_scratch_dir("blob_escape");
@@ -1053,11 +1017,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// MED (round-2): two ranges covering the same LBA make lookup_sector's binary
-    /// search resolve to an ARBITRARY one of them, so a hostile/corrupt profile
-    /// could serve the wrong sector's bytes as authoritative GOOD. An overlapping
-    /// map must be treated as corrupt and fall back to flat (empty map). Catches a
-    /// mutation that drops the overlap check and keeps the ambiguous map.
+    // Two ranges covering the same LBA make lookup_sector's binary search resolve
+    // to an ARBITRARY one of them, so an overlapping map must be treated as
+    // corrupt and fall back to flat (empty map), not served as authoritative GOOD.
     #[test]
     fn overlapping_ranges_serve_nothing() {
         let mut data = bdsm_header(2);
@@ -1083,10 +1045,9 @@ mod tests {
         );
     }
 
-    /// `LoadedProfile::load` on a path that is neither a directory nor a
-    /// `.json` file must reject it explicitly, not silently return `None` via
-    /// some other path. Catches a mutation that drops the format-detection
-    /// `else` arm (and its diagnostic) entirely.
+    // `LoadedProfile::load` on a path that is neither a directory nor a `.json`
+    // file must reject it explicitly, not silently return `None` via some other
+    // path.
     #[test]
     fn load_rejects_unknown_format() {
         let dir = test_scratch_dir("unknown_format");
@@ -1099,17 +1060,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// One `drive.toml` exercising every remaining loader branch that
-    /// `profile_loads_with_every_blob_missing` and
-    /// `blob_filenames_cannot_escape_the_profile_directory` do not: comment/blank
-    /// lines, an invalid `current_profile` (kept at default, not coerced to
-    /// 0x0000), an invalid `[features]` key (skipped, not coerced to 0x0000), an
-    /// invalid `[read_buffer]` key (skipped, not coerced to id 0), the no-op
-    /// `[unlock]` section, an unrecognised section (`_ => {}`), a *present*
-    /// feature/read_buffer blob (the positive load path, not just the
-    /// missing-file path), no `rpc_state` key at all (the `Vec::new()` default,
-    /// not the read-and-empty path), and a loose `rb_*.bin` file picked up by the
-    /// directory scan even though it is not listed in `drive.toml`.
+    // One `drive.toml` exercising every remaining loader branch not covered
+    // elsewhere: malformed entries, present blobs, and the loose rb_*.bin scan.
+    // See docs/profile-loader.md — toml_loader_covers_malformed_entries_and_positive_blob_loads.
     #[test]
     fn toml_loader_covers_malformed_entries_and_positive_blob_loads() {
         let dir = test_scratch_dir("toml_full_coverage");
@@ -1170,12 +1123,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The JSON loader's remaining branches: a valid `[read_buffer]` entry
-    /// alongside an invalid key (skipped, not coerced to id 0), an invalid
-    /// `current_profile` (kept at the 0x0043 default), and the optional
-    /// `mode_sense.page_2a` / `report_key.rpc_state` blobs actually present.
-    /// `json_invalid_feature_code_is_skipped_not_coerced_to_zero` covers the
-    /// `[features]` half; this covers the rest.
+    // The JSON loader's remaining branches: a valid `[read_buffer]` entry
+    // alongside an invalid key, an invalid `current_profile`, and the optional
+    // `mode_sense.page_2a` / `report_key.rpc_state` blobs actually present.
     #[test]
     fn json_loader_covers_read_buffer_and_optional_blobs() {
         use std::io::Write;
@@ -1224,10 +1174,9 @@ mod tests {
         assert_eq!(p.rpc_state, vec![0x01, 0x02]);
     }
 
-    /// `safe_disc_dir` when the base itself resolves (an existing `discs/`
-    /// directory) but the requested name does not exist under it: must reject via
-    /// the disc_dir-canonicalize-failure arm, not the base-canonicalize-failure
-    /// arm exercised by `safe_disc_dir_rejects_traversal`.
+    // `safe_disc_dir` when the base itself resolves (an existing `discs/`
+    // directory) but the requested name does not exist under it: must reject
+    // via the disc_dir-canonicalize-failure arm, not the base-failure arm.
     #[test]
     fn safe_disc_dir_rejects_missing_target_under_existing_base() {
         let base = test_scratch_dir("safe_disc_dir_existing_base");
@@ -1249,10 +1198,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A blob past `MAX_BIN_BYTES` must be refused with an `Err` naming the size,
-    /// not silently truncated or OOM-ing the process. A sparse file (created via
-    /// `set_len`, not by writing real bytes) reports the oversized length to
-    /// `stat` without actually consuming disk.
+    // A blob past `MAX_BIN_BYTES` must be refused with an `Err` naming the size,
+    // not silently truncated or OOM-ing the process. A sparse file (via
+    // `set_len`) reports the oversized length to `stat` without using disk.
     #[test]
     fn oversized_blob_is_rejected() {
         let dir = test_scratch_dir("oversized_blob");
@@ -1300,10 +1248,8 @@ mod tests {
         assert_eq!(super::parse_hex(""), Vec::<u8>::new());
     }
 
-    /// The other half of the overlap check: ranges that merely TOUCH
-    /// (prev end == next start) are disjoint and must be KEPT, or a legitimate
-    /// back-to-back capture would be wrongly discarded. Catches an over-strict
-    /// `<=` where the guard must use `<`.
+    // The other half of the overlap check: ranges that merely TOUCH (prev end
+    // == next start) are disjoint and must be KEPT, not wrongly discarded.
     #[test]
     fn adjacent_non_overlapping_ranges_are_kept() {
         let mut data = bdsm_header(2);

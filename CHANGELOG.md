@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.0] — 2026-09-02
+
+### Fixed
+
+- `profile`: a BDSM sector file that declares zero ranges now serves nothing, instead of mis-serving its 8-byte header as sector 0.
+
+### Changed
+
+- Version aligned to 1.7.0 for the unified release. Documentation fixes (real profile-directory names in examples) and internal CI/lint hardening.
+
 ## [1.6.14] — 2026-08-31
 
 ### Changed
