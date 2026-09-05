@@ -6,6 +6,12 @@ mod profile;
 mod scsi;
 mod sg;
 
+// Terminal-escape sanitiser for untrusted profile text, shared with control.rs
+// and the CLI binary through the same `#[path]` mechanism.
+#[path = "sanitize.rs"]
+mod sanitize;
+use sanitize::sanitize_for_terminal;
+
 use once_cell::sync::Lazy;
 use profile::LoadedProfile;
 use sg::{SG_IO, SgIoHdr};

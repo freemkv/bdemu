@@ -7,6 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+// Duplicates profile::SECTOR_SIZE: this binary's cdylib sibling crate-type
+// means capture.rs can't `use crate::profile` like the lib side does.
 const SECTOR_SIZE: usize = 2048;
 
 // Print a partial-line progress label and flush it immediately: stdout is

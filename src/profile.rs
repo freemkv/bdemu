@@ -455,16 +455,9 @@ impl LoadedProfile {
 /// path (in `load_dir`) and the control-socket `load` command (`control.rs`'s
 /// `cmd_load`) call it, so the two disc-selection paths cannot drift apart.
 pub fn safe_disc_dir(discs_base: &Path, name: &str) -> Option<std::path::PathBuf> {
-    // Reject anything that is not a single, plain path component: separators or
-    // dot components would let `join` walk out of (or, for an absolute path,
-    // replace) the discs directory.
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name == "."
-        || name == ".."
-        || name.contains('\0')
-    {
+    // Reject anything that is not a single plain path component (separators / dot
+    // components would let `join` escape discs/). Same predicate as `read_blob`.
+    if !is_contained_blob_name(name) {
         return None;
     }
 
