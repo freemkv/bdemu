@@ -6,6 +6,12 @@ mod profile;
 mod scsi;
 mod sg;
 
+// Terminal-escape sanitiser for untrusted profile text, shared with control.rs
+// and the CLI binary through the same `#[path]` mechanism.
+#[path = "sanitize.rs"]
+mod sanitize;
+use sanitize::sanitize_for_terminal;
+
 use once_cell::sync::Lazy;
 use profile::LoadedProfile;
 use sg::{SG_IO, SgIoHdr};
@@ -36,7 +42,7 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
 
     eprintln!(
         "bdemu: loaded '{}' ({} features, {} read_bufs, disc={})",
-        loaded.name,
+        sanitize_for_terminal(&loaded.name),
         loaded.features.len(),
         loaded.read_bufs.len(),
         if has_disc { "yes" } else { "no" }
