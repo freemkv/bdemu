@@ -1799,6 +1799,22 @@ mod tests {
     }
 
     #[test]
+    fn inquiry_vpd_page_80_clamps_serial_over_255_bytes() {
+        let _g = guard();
+        let mut p = empty_profile();
+        // A malformed profile carrying a 300-byte serial: the page-length byte
+        // is a u8, so the response must clamp to 255 rather than truncate via
+        // `as u8` and advertise a wrong (wrapped) length.
+        let mut feat = vec![0x01, 0x08, 0x00, 0x00];
+        feat.extend(std::iter::repeat_n(b'X', 300));
+        p.features.push((0x0108, feat));
+        let (status, data, _) = run(&p, &[0x12, 0x01, 0x80, 0, 0, 0], 260);
+        assert_eq!(status, 0x00);
+        assert_eq!(data[3], 255, "page length clamped to 255");
+        assert_eq!(&data[4..259], &[b'X'; 255][..]);
+    }
+
+    #[test]
     fn inquiry_vpd_unsupported_page_is_illegal_request() {
         let _g = guard();
         let (status, _, sense) = run(&empty_profile(), &[0x12, 0x01, 0x83, 0, 8, 0], 8);
