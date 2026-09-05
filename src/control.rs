@@ -16,10 +16,9 @@ mod socket_name;
 pub use socket_name::socket_path;
 
 // Terminal-escape sanitiser for untrusted text we echo back to an operator's
-// terminal, shared with the CLI binary through the same `#[path]` mechanism.
-#[path = "sanitize.rs"]
-mod sanitize;
-use sanitize::sanitize_for_terminal;
+// terminal; the lib crate owns the module (crate::sanitize), the CLI binary
+// pulls the same file in via its own `#[path]`.
+use crate::sanitize::sanitize_for_terminal;
 
 /// Commands the CLI can send to the running emulator.
 #[derive(Debug)]
