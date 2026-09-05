@@ -457,8 +457,15 @@ fn validate_profile(dir: &str) -> bool {
     ] {
         let fp = p.join(file);
         if fp.exists() {
-            let sz = std::fs::metadata(&fp).map(|m| m.len()).unwrap_or(0);
-            println!("  ✓ {} ({}, {} bytes)", file, desc, sz);
+            // `exists()` raced or perms hid the size: don't coerce that to a
+            // fake 0-byte success, report it as the failure it is.
+            match std::fs::metadata(&fp) {
+                Ok(m) => println!("  ✓ {} ({}, {} bytes)", file, desc, m.len()),
+                Err(e) => {
+                    println!("  ✗ {} ({}) unreadable: {}", file, desc, e);
+                    ok = false;
+                }
+            }
         } else {
             println!("  — {} ({}) not present", file, desc);
         }

@@ -16,10 +16,9 @@ mod socket_name;
 pub use socket_name::socket_path;
 
 // Terminal-escape sanitiser for untrusted text we echo back to an operator's
-// terminal, shared with the CLI binary through the same `#[path]` mechanism.
-#[path = "sanitize.rs"]
-mod sanitize;
-use sanitize::sanitize_for_terminal;
+// terminal; the lib crate owns the module (crate::sanitize), the CLI binary
+// pulls the same file in via its own `#[path]`.
+use crate::sanitize::sanitize_for_terminal;
 
 /// Commands the CLI can send to the running emulator.
 #[derive(Debug)]
@@ -379,27 +378,33 @@ fn cmd_list_discs(state: &Arc<Mutex<EmulatorState>>) -> Response {
         return Response::multi(vec!["OK".into(), "no discs directory".into()]);
     }
 
+    let entries = match std::fs::read_dir(&discs_dir) {
+        Ok(entries) => entries,
+        // The dir exists (checked above) but couldn't be enumerated (perms,
+        // race with removal): that's not "no discs", so report it distinctly
+        // instead of the bare OK a swallowed error would have produced.
+        Err(e) => return Response::error(&format!("could not enumerate discs: {}", e)),
+    };
+
     let mut lines = vec!["OK".to_string()];
-    if let Ok(entries) = std::fs::read_dir(&discs_dir) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let has_sectors = entry.path().join("sectors.bin").exists();
-                let marker = if Some(&name) == loaded_name.as_ref() {
-                    " *"
-                } else {
-                    ""
-                };
-                // Untrusted name printed to a terminal: an ESC could repaint the
-                // screen, a newline could forge a response line. Compare on the
-                // RAW name (what `load` addresses) but display the sanitised form.
-                lines.push(format!(
-                    "  {}{} (sectors={})",
-                    sanitize_for_terminal(&name),
-                    marker,
-                    has_sectors
-                ));
-            }
+    for entry in entries.flatten() {
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let has_sectors = entry.path().join("sectors.bin").exists();
+            let marker = if Some(&name) == loaded_name.as_ref() {
+                " *"
+            } else {
+                ""
+            };
+            // Untrusted name printed to a terminal: an ESC could repaint the
+            // screen, a newline could forge a response line. Compare on the
+            // RAW name (what `load` addresses) but display the sanitised form.
+            lines.push(format!(
+                "  {}{} (sectors={})",
+                sanitize_for_terminal(&name),
+                marker,
+                has_sectors
+            ));
         }
     }
 
