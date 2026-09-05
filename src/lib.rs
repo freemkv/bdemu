@@ -36,7 +36,7 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
 
     eprintln!(
         "bdemu: loaded '{}' ({} features, {} read_bufs, disc={})",
-        loaded.name,
+        sanitize_for_terminal(&loaded.name),
         loaded.features.len(),
         loaded.read_bufs.len(),
         if has_disc { "yes" } else { "no" }
