@@ -28,7 +28,7 @@ bdemu run --profile profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 --disc my_movie -
 ## Commands
 
 ```
-bdemu 1.6.14
+bdemu 1.7.0
 
 Commands:
   run --profile <dir> [--disc <name>] -- <cmd>   Emulate drive, run command

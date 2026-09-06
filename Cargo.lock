@@ -27,9 +27,9 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bdemu"
-version = "1.6.14"
+version = "1.7.0"
 dependencies = [
- "freemkv-unlock",
+ "freemkv-unlock 1.6.14",
  "libc",
  "libfreemkv",
  "once_cell",
@@ -129,18 +129,18 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.16"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
 dependencies = [
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
@@ -148,18 +148,18 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.20"
+version = "0.9.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
 dependencies = [
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.22"
+version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crypto-common"
@@ -225,7 +225,24 @@ dependencies = [
 [[package]]
 name = "freemkv-unlock"
 version = "1.6.14"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.6.14#99d63cb20b5f3100181a83cf2eecbf071c762afc"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.6.14#dd14eceb7cc12721589fee405792b822984e6676"
+dependencies = [
+ "aes",
+ "base64",
+ "num-bigint",
+ "num-traits",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tracing",
+]
+
+[[package]]
+name = "freemkv-unlock"
+version = "1.7.0"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.7.0#676a55c234ec26456f77de97f0ee8c4a37c513ba"
 dependencies = [
  "aes",
  "base64",
@@ -278,9 +295,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.1"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
@@ -309,13 +326,13 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libfreemkv"
-version = "1.6.14"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.6.14#1ed0612c995c4828d7d2ce420acade24c5518c98"
+version = "1.7.0"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.7.0#0954b8e4d8e45f79fbe2c6b76a62a9bd10793d19"
 dependencies = [
  "aes",
  "base64",
  "crossbeam-channel",
- "freemkv-unlock",
+ "freemkv-unlock 1.7.0",
  "libc",
  "memchr",
  "rand",
@@ -474,7 +491,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -531,9 +548,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
