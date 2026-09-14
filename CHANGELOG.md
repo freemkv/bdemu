@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.1] — UNRELEASED
+
+### Changed
+
+- Version aligned to 1.7.1 for the unified release (freemkv-unlock 1.7.1 LibreDrive unlock fix); no functional changes.
+
 ## [1.7.0] — 2026-09-02
 
 ### Fixed
