@@ -53,6 +53,39 @@ def _fence_toggle(body):
     return body.strip().startswith("```")
 
 
+def _scan_raw_state(line, raw_hashes):
+    """Advance the raw-string open state across one line.
+
+    raw_hashes is None (not in a raw string) or int N (open, needs closer
+    '"' + N*'#'). Returns the state at the end of the line's CODE portion. Two
+    things the naive "first match" check got wrong are handled: every raw-string
+    opener on the line is tracked (not just the first), so a line that closes one
+    raw string and opens a second ends up correctly marked open; and a trailing
+    `//` comment outside any raw string is skipped, so a raw-string-looking
+    substring inside it (e.g. `// see r"x"`) can't spuriously flip the state.
+    """
+    i, n = 0, len(line)
+    while i < n:
+        if raw_hashes is not None:
+            closer = '"' + "#" * raw_hashes
+            idx = line.find(closer, i)
+            if idx == -1:
+                return raw_hashes  # still open at end of line
+            raw_hashes = None
+            i = idx + len(closer)
+            continue
+        # Outside a raw string: an opener and a `//` comment both possible.
+        m = _RAW_OPEN.search(line, i)
+        if m is None:
+            break  # no opener left; any trailing `//` is just a comment
+        c = line.find("//", i)
+        if c != -1 and c < m.start():
+            break  # comment starts first; the rest of the line is comment
+        raw_hashes = len(m.group(1))
+        i = m.end()
+    return raw_hashes
+
+
 def _classify(lines):
     """Yield per-line dicts: comment kind ('doc'/'plain'/None), doc-ness of
     block comments, and code info. Block comments are tracked across lines.
@@ -69,8 +102,7 @@ def _classify(lines):
         # until the string closes. Prevents `/* */` or `//` lines in an embedded
         # page from being counted as comment blocks.
         if raw_hashes is not None:
-            if ('"' + "#" * raw_hashes) in raw:
-                raw_hashes = None
+            raw_hashes = _scan_raw_state(raw, raw_hashes)
             info.append(rec)
             continue
         if in_block:
@@ -97,11 +129,10 @@ def _classify(lines):
             continue
         # Code (or blank). Blank = empty after strip.
         rec["code"] = s != ""
-        # A code line may OPEN a raw string that spans following lines. Detected
-        # only on code (comments were handled above), so `// see r"x"` is safe.
-        m = _RAW_OPEN.search(raw)
-        if m and ('"' + "#" * len(m.group(1))) not in raw[m.end():]:
-            raw_hashes = len(m.group(1))
+        # A code line may OPEN a raw string that spans following lines. The scan
+        # tracks every opener/closer on the line and stops at a trailing `//`, so
+        # `// see r"x"` and a close-then-reopen on one line are both handled.
+        raw_hashes = _scan_raw_state(raw, None)
         info.append(rec)
     return info
 
@@ -227,6 +258,21 @@ def _selftest():
             'const H: &str = r##"<style>\n'
             + "".join("/* css note */\n" for _ in range(8))
             + '</style>"##;\nfn h() {}\n',
+            0,
+        ),
+        # a raw-string-looking substring in a trailing // comment must NOT open a
+        # raw string and swallow the following inline run (4 lines -> violation)
+        (
+            'let x = 1; // see r"not really\n'
+            + "// a\n// b\n// c\n// d\nfn tc() {}\n",
+            1,
+        ),
+        # a line that closes one raw string and opens a SECOND must stay open, so
+        # comment-like lines inside the second are string data, not a comment run
+        (
+            'const A: &str = r"a"; const B: &str = r##"<style>\n'
+            + "".join("/* css note */\n" for _ in range(8))
+            + '</style>"##;\nfn tr() {}\n',
             0,
         ),
         # //! module doc may run long -> EXEMPT (no cap)

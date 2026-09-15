@@ -425,6 +425,13 @@ fn read_sectors(
     // u64 so an LBA past u32::MAX logs at its true value, not truncated.
     let mut missing: Option<u64> = None;
 
+    // A READ of >=1 sector whose clamped transfer holds <1 whole sector skips
+    // every miss loop below and would fall through to write_response with zeros
+    // at GOOD — the zero-fill-at-GOOD defect. Flag the first LBA as missing.
+    if count > 0 && out_sectors == 0 {
+        missing = Some(u64::from(lba));
+    }
+
     if let Some(disc) = &profile.disc {
         if !disc.sector_map.is_empty() {
             // Sparse sector map: look up each requested sector
@@ -1513,6 +1520,35 @@ mod tests {
 
         assert_eq!(status, 0x02, "a partially-captured span must fail");
         assert_eq!(sense[12], 0x11);
+    }
+
+    // A READ of count>=1 but a sub-sector dxfer_len clamps `total` below one
+    // sector, so out_sectors==0 and every miss loop is skipped. Without the
+    // guard this returned zeros at GOOD; it must be UNRECOVERED READ ERROR.
+    #[test]
+    fn read10_subsector_dxfer_len_is_check_condition_not_zeros() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_media_changed(false);
+
+        // Even a captured LBA must fail here: fewer than 2048 bytes can't carry
+        // a whole sector, so there is nothing legitimate to return.
+        let profile = sparse_disc_profile(&[(100, 3)], 0xA5);
+        let cdb = read10_cdb(100, 1);
+        let mut data = vec![0xEEu8; 1024]; // sub-sector transfer length
+        let mut sense = [0u8; 32];
+        let mut hdr = hdr_for(&cdb, &mut data, &mut sense);
+        handle_scsi(&mut hdr, &profile);
+
+        assert_eq!(
+            hdr.status, 0x02,
+            "a sub-sector-length read must be CHECK CONDITION, not GOOD"
+        );
+        assert_eq!(sense[2], 0x03, "sense key must be MEDIUM ERROR");
+        assert_eq!(sense[12], 0x11, "ASC must be UNRECOVERED READ ERROR");
+        assert!(
+            data.iter().all(|&b| b == 0xEE),
+            "no zero-filled data may be presented at GOOD"
+        );
     }
 
     /// READ(12) shares the miss path with READ(10) — its CDB parses count from a
