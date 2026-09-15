@@ -87,7 +87,12 @@ pub fn parse_sector_file(data: Vec<u8>) -> (Vec<u8>, Vec<(u32, u32, usize)>) {
                 _ => return (Vec::new(), Vec::new()),
             };
 
-            map.push((start_lba, count, data_offset));
+            // Drop zero-count ranges: they capture nothing yet, left in, would
+            // slip past the overlap guard (end == start) and leave lookup_sector
+            // a non-monotonic map. Dropping them keeps the binary search sound.
+            if count > 0 {
+                map.push((start_lba, count, data_offset));
+            }
             data_offset = next_offset;
         }
 
@@ -1036,6 +1041,28 @@ mod tests {
             sectors.is_empty(),
             "an overlapping BDSM must serve no sectors, not its header as flat data"
         );
+    }
+
+    // A zero-count range captures nothing yet, left in the map, evades the
+    // overlap guard (end == start) and makes lookup_sector's search non-
+    // monotonic. It must be dropped — here a (100,0) masking a (100,3) overlap.
+    #[test]
+    fn zero_count_ranges_are_dropped_not_left_to_mask_overlap() {
+        let mut data = bdsm_header(2);
+        // Range 0: zero-count at LBA 100 (end == start == 100).
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        // Range 1: LBA 100..103 — shares LBA 100 with range 0's start.
+        data.extend_from_slice(&100u32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&vec![0u8; 3 * 2048]);
+
+        let (_sectors, map) = parse_sector_file(data);
+        // The zero-count range is gone; only the real range remains, so the map
+        // is strictly monotonic and binary search is well-defined.
+        assert_eq!(map.len(), 1, "zero-count range must be dropped");
+        assert_eq!(map[0].0, 100, "surviving range starts at 100");
+        assert_eq!(map[0].1, 3, "surviving range has count 3");
     }
 
     // `LoadedProfile::load` on a path that is neither a directory nor a `.json`
