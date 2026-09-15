@@ -31,6 +31,7 @@ INLINE_CAP = 3
 DOC_CAP = 8
 
 _RAW_OPEN = re.compile(r'r(#*)"')  # raw string opener: r"…", r#"…"#, br##"…"## …
+_CHAR_LIT = re.compile(r"'(?:\\.|[^'\\\n])'")  # a Rust char literal (not a lifetime)
 
 
 def _strip_line_comment(s):
@@ -57,12 +58,12 @@ def _scan_raw_state(line, raw_hashes):
     """Advance the raw-string open state across one line.
 
     raw_hashes is None (not in a raw string) or int N (open, needs closer
-    '"' + N*'#'). Returns the state at the end of the line's CODE portion. Two
-    things the naive "first match" check got wrong are handled: every raw-string
-    opener on the line is tracked (not just the first), so a line that closes one
-    raw string and opens a second ends up correctly marked open; and a trailing
-    `//` comment outside any raw string is skipped, so a raw-string-looking
-    substring inside it (e.g. `// see r"x"`) can't spuriously flip the state.
+    '"' + N*'#'). Returns the state at the end of the line's CODE portion. The
+    line is walked left-to-right so lexical context is honoured: every raw-string
+    opener is tracked (not just the first), and ordinary `"…"`/`'…'` literals are
+    skipped whole so neither a `//` (e.g. inside `"http://x"`) nor a raw-looking
+    substring inside them can spuriously flip the state; a `//` reached OUTSIDE
+    any literal ends the code portion (the rest is a comment).
     """
     i, n = 0, len(line)
     while i < n:
@@ -74,15 +75,30 @@ def _scan_raw_state(line, raw_hashes):
             raw_hashes = None
             i = idx + len(closer)
             continue
-        # Outside a raw string: an opener and a `//` comment both possible.
-        m = _RAW_OPEN.search(line, i)
-        if m is None:
-            break  # no opener left; any trailing `//` is just a comment
-        c = line.find("//", i)
-        if c != -1 and c < m.start():
-            break  # comment starts first; the rest of the line is comment
-        raw_hashes = len(m.group(1))
-        i = m.end()
+        # Outside any string: a `//` comment ends the code portion.
+        if line.startswith("//", i):
+            break
+        # A raw-string opener (r"…", r#"…"#, br##"…"## …) at this position?
+        m = _RAW_OPEN.match(line, i)
+        if m is not None:
+            raw_hashes = len(m.group(1))
+            i = m.end()
+            continue
+        ch = line[i]
+        if ch == '"':
+            # Ordinary string literal: skip to the closing quote, honouring `\`
+            # escapes, so a `//` or raw-looking substring inside is just data.
+            j = i + 1
+            while j < n and line[j] != '"':
+                j += 2 if line[j] == "\\" else 1
+            i = j + 1
+            continue
+        if ch == "'":
+            cm = _CHAR_LIT.match(line, i)
+            # A char literal is skipped whole; a bare `'` (a lifetime) is not.
+            i = cm.end() if cm is not None else i + 1
+            continue
+        i += 1
     return raw_hashes
 
 
@@ -273,6 +289,15 @@ def _selftest():
             'const A: &str = r"a"; const B: &str = r##"<style>\n'
             + "".join("/* css note */\n" for _ in range(8))
             + '</style>"##;\nfn tr() {}\n',
+            0,
+        ),
+        # a `//` inside a NORMAL "..." string must NOT be read as a comment: the
+        # real r#"…" opener later on the SAME line still opens, so the following
+        # lines are raw-string data (raw stays open), not an inline comment run
+        (
+            'let url = "http://x"; let body = r#"start\n'
+            + "".join("// css note\n" for _ in range(8))
+            + 'end"#;\nfn tu() {}\n',
             0,
         ),
         # //! module doc may run long -> EXEMPT (no cap)
