@@ -46,8 +46,8 @@ codegen-units = 1
 # Cargo.lock. Local dev overrides it with a path patch via the gitignored
 # .cargo/config.toml.
 [patch.crates-io]
-# Local-dev path patch (mirrors freemkv-unlock above and the other repos'
-# "restore path dep for local dev"), so dev resolves libfreemkv + its
-# freemkv-unlock to the 1.7.4 siblings — a single version, no doc/output
-# collision. The release script re-pins this to the new git tag at release.
-libfreemkv = { path = "../libfreemkv" }
+# Committed as a GIT TAG patch (like every sibling repo): the release build can
+# start the instant the libfreemkv tag exists, and the release script re-pins
+# this tag to the new version before regenerating Cargo.lock. Local dev overrides
+# it with a path patch via the gitignored .cargo/config.toml.
+libfreemkv = { git = "https://github.com/freemkv/libfreemkv", tag = "v1.7.4" }
