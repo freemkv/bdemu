@@ -10,6 +10,11 @@ on:
     branches: [main, dev, qa]
   pull_request:
 
+# Rapid dev pushes supersede their own in-progress runs instead of stacking.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # WHY THE SIBLING CHECKOUTS — this is NOT a monorepo.
 #
 # bdemu path-deps ../freemkv-unlock (with the `emulation` feature), and CI
@@ -19,29 +24,22 @@ on:
 # LAST RELEASE of the library rather than its dev tip — a coordinated change
 # across the repos could not be verified until release.sh cut the tags.
 #
-# The fix mirrors the developer's local layout. Every repo is checked out into
-# a subdirectory of $GITHUB_WORKSPACE, reproducing
-# ~/Developer/freemkv/{bdemu,libfreemkv,freemkv-unlock}, so `../freemkv-unlock`
-# resolves exactly as it does locally, and a generated .cargo/config.toml
-# redirects the libfreemkv git-tag patch at the sibling checkout. Config-level
-# [patch.crates-io] wins over the manifest one — the same mechanism local
-# development already uses (see the note in Cargo.toml).
-#
-# Subdirectories rather than `../libfreemkv` because actions/checkout refuses
-# any `path:` outside $GITHUB_WORKSPACE, and the workspace IS the repo dir.
-# Repos stay separate, tags stay separate, the release cascade is untouched.
+# The fix mirrors the developer's local layout via the shared
+# checkout-siblings@v1 composite: every sibling is cloned at the branch-matched
+# ref alongside bdemu, reproducing ~/Developer/freemkv/{bdemu,libfreemkv,
+# freemkv-unlock} so `../freemkv-unlock` resolves as it does locally, and the
+# composite writes a .cargo/config.toml [patch.crates-io] redirecting the
+# libfreemkv git-tag patch at the sibling checkout. Config-level [patch]
+# wins over the manifest one — the same mechanism local development uses.
 #
 # `--locked` is gone even though bdemu DOES commit a Cargo.lock. The committed
 # lock resolves the freemkv crates as PATH packages and carries [[patch.unused]]
 # entries for crates bdemu does not even depend on — artifacts of whichever
 # local .cargo/config.toml was active when it was last written. It describes a
 # developer's machine, not a release, so gating every push on it would fail for
-# reasons that say nothing about the code.
-#
-# Nothing is lost by dropping it here. release.sh regenerates the lock with the
-# real git tags before tagging, and release.yml then verifies the pin — see its
-# "Verify Cargo.lock libfreemkv is from the expected git tag" step. That is the
-# moment the pin actually has to hold, and it is still gated.
+# reasons that say nothing about the code. release.sh regenerates the lock with
+# the real git tags before tagging, and release.yml verifies the pin — that is
+# the moment the pin actually has to hold, and it is still gated.
 #
 # bdemu is a Linux-only product (release.yml builds ubuntu-22.04 only), so
 # there is deliberately no macOS/Windows matrix here.
@@ -56,7 +54,7 @@ jobs:
   changelog:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
       - name: Require a CHANGELOG entry for the crate version on main
         shell: bash
         run: |
@@ -76,28 +74,14 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: freemkv-unlock
-      - name: Resolve siblings from their dev tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -113,28 +97,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: freemkv-unlock
-      - name: Resolve siblings from their dev tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -145,28 +115,14 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: freemkv-unlock
-      - name: Resolve siblings from their dev tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
@@ -180,28 +136,14 @@ jobs:
   release-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: freemkv-unlock
-      - name: Resolve siblings from their dev tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -213,35 +155,18 @@ jobs:
   # umbrella/`needs:` gate, and Codecov runs in informational mode (see
   # codecov.yml), so it never blocks a merge or release. It mirrors the `test`
   # job's sibling-checkout layout — bdemu is not a monorepo, so the siblings and
-  # the generated .cargo/config.toml patch are what let cargo resolve at all
-  # (see the header note). `--locked` is deliberately omitted here for the same
-  # reason the other jobs omit it: the committed Cargo.lock describes a
-  # developer's machine, not a release.
+  # the generated .cargo/config.toml patch are what let cargo resolve at all.
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: "${{ github.ref_name == 'qa' && 'qa' || 'dev' }}"
-          path: freemkv-unlock
-      - name: Resolve siblings from their dev tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview

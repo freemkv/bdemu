@@ -13,6 +13,7 @@ name: qa
 # Sibling repos are checked out at `qa`, NOT `dev`. A qa run that resolved its
 # dependencies from dev tips would be validating a combination that is not the
 # one being released, which is the exact failure this branch exists to prevent.
+# The shared checkout-siblings@v1 composite resolves qa->qa from the ref.
 #
 # What this gate CANNOT cover: `disc://` and real `iso://` need physical media,
 # and no hosted runner has an optical drive or the image hoard. Those run on a
@@ -22,6 +23,11 @@ on:
   push:
     branches: [qa]
   workflow_dispatch:
+
+# A newer qa push supersedes an in-progress candidate's checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ── Name the candidate ────────────────────────────────────────────────
@@ -43,7 +49,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Stamp the next rc
@@ -71,28 +77,14 @@ jobs:
         os: ['ubuntu-latest']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: qa
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: qa
-          path: freemkv-unlock
-      - name: Resolve siblings from their qa tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -106,28 +98,14 @@ jobs:
   cross-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v5
         with:
           path: bdemu
-      - uses: actions/checkout@v7
+      - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
-          repository: freemkv/libfreemkv
-          ref: qa
-          path: libfreemkv
-      - uses: actions/checkout@v7
-        with:
-          repository: freemkv/freemkv-unlock
-          ref: qa
-          path: freemkv-unlock
-      - name: Resolve siblings from their qa tips
-        shell: bash
-        working-directory: bdemu
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [patch.crates-io]
-          libfreemkv = { path = "../libfreemkv" }
-          EOF
+          checkout: libfreemkv freemkv-unlock
+          patch: libfreemkv
+          self: bdemu
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
