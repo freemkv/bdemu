@@ -78,7 +78,7 @@ jobs:
 
   # Tests run as a PARALLEL TRIPWIRE: they fail the run if they fail, but the
   # build job does NOT `needs:` this job. The tag decision was already gated by
-  # the local precommit (same Rust 1.86, same commit).
+  # CI (ci.yml on dev, then a green qa.yml) at the same rust-version, same commit.
   test:
     needs: verify
     runs-on: ubuntu-22.04
@@ -121,9 +121,9 @@ jobs:
   # NOTE: a former `update-readme` job used to check out `main`, rewrite the
   # README version strings, and push an "Update to bdemu vX.Y.Z" commit straight
   # to `main` on every tag. It was removed 2026-08-22 because it RACED the
-  # unified release: release.sh already bumps this README inside the tagged
-  # commit and then fast-forwards `main` to that commit — the bot instead pushed
-  # a redundant README bump onto the OLD main, diverging it from the tag so
-  # release.sh's advance-main step (FF-only) refused and every release died at
-  # bdemu. The README bump is owned by release.sh; nothing but release.sh should
-  # write to `main`.
+  # unified release: release-orchestrate.yml already bumps this README inside the
+  # tagged commit and then fast-forwards `main` to that commit — the bot instead
+  # pushed a redundant README bump onto the OLD main, diverging it from the tag so
+  # release-orchestrate.yml's advance-main step (FF-only) refused and every release
+  # died at bdemu. The README bump is owned by release-orchestrate.yml; nothing but
+  # release-orchestrate.yml should write to `main`.

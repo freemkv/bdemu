@@ -22,7 +22,7 @@ concurrency:
 # resolving a single dependency. Separately, the committed Cargo.toml resolves
 # libfreemkv from a git TAG, so where CI did build it was building against the
 # LAST RELEASE of the library rather than its dev tip — a coordinated change
-# across the repos could not be verified until release.sh cut the tags.
+# across the repos could not be verified until release-orchestrate.yml cut the tags.
 #
 # The fix mirrors the developer's local layout via the shared
 # checkout-siblings@v1 composite: every sibling is cloned at the branch-matched
@@ -37,7 +37,7 @@ concurrency:
 # entries for crates bdemu does not even depend on — artifacts of whichever
 # local .cargo/config.toml was active when it was last written. It describes a
 # developer's machine, not a release, so gating every push on it would fail for
-# reasons that say nothing about the code. release.sh regenerates the lock with
+# reasons that say nothing about the code. release-orchestrate.yml regenerates the lock with
 # the real git tags before tagging, and release.yml verifies the pin — that is
 # the moment the pin actually has to hold, and it is still gated.
 #
