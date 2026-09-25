@@ -27,9 +27,9 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bdemu"
-version = "1.7.4"
+version = "1.7.6"
 dependencies = [
- "freemkv-unlock 1.7.4",
+ "freemkv-unlock",
  "libc",
  "libfreemkv",
  "once_cell",
@@ -186,25 +186,7 @@ dependencies = [
 
 [[package]]
 name = "freemkv-unlock"
-version = "1.7.4"
-dependencies = [
- "aes",
- "base64",
- "num-bigint",
- "num-traits",
- "rand",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "freemkv-unlock"
-version = "1.7.4"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.7.4#2da368324f4b08eba5ff012472d7f1309ee8b617"
+version = "1.7.6"
 dependencies = [
  "aes",
  "base64",
@@ -279,13 +261,12 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libfreemkv"
-version = "1.7.4"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.7.4#4026c1a5d100250512b7eb5d15d4a2b91f98ce2a"
+version = "1.7.6"
 dependencies = [
  "aes",
  "base64",
  "crossbeam-channel",
- "freemkv-unlock 1.7.4 (git+https://github.com/freemkv/freemkv-unlock?tag=v1.7.4)",
+ "freemkv-unlock",
  "libc",
  "memchr",
  "rayon",
@@ -615,3 +596,15 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
+
+[[patch.unused]]
+name = "freemkv-engine"
+version = "1.7.6"
+
+[[patch.unused]]
+name = "freemkv-i18n"
+version = "1.7.6"
+
+[[patch.unused]]
+name = "freemkv-keysources"
+version = "1.7.6"
