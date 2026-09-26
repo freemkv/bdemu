@@ -187,6 +187,7 @@ dependencies = [
 [[package]]
 name = "freemkv-unlock"
 version = "1.7.7"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.7.7#1d20be4a411b5c15bc3e29d4beeb2537d6cd3ebc"
 dependencies = [
  "aes",
  "base64",
@@ -262,6 +263,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "libfreemkv"
 version = "1.7.7"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.7.7#c8e67f16b46687fb99a117d42ce4dc4a89001876"
 dependencies = [
  "aes",
  "base64",
@@ -596,15 +598,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "freemkv-engine"
-version = "1.7.7"
-
-[[patch.unused]]
-name = "freemkv-i18n"
-version = "1.7.7"
-
-[[patch.unused]]
-name = "freemkv-keysources"
-version = "1.7.7"
