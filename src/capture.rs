@@ -26,8 +26,6 @@ fn next_chunk(lba: u32, end: u32, chunk: u16) -> u16 {
     (end - lba).min(chunk as u32) as u16
 }
 
-// See docs/capture-buffer-reuse.md — why the reused buffer's tail must be
-// re-zeroed after each short read, and why `transferred` is clamped first.
 fn zero_fill_tail(buf: &mut [u8], transferred: usize) {
     let filled = transferred.min(buf.len());
     buf[filled..].fill(0);
@@ -333,9 +331,8 @@ fn slugify(name: &str) -> String {
         .to_string()
 }
 
-// Capture one SCSI metadata structure to `filename`; returns true on a hard
-// failure of a *required* structure. See docs/capture-scsi-save.md for the
-// required-vs-optional-absent distinction this return value encodes.
+// Capture one SCSI metadata structure to `filename`; returns true on a hard failure of a
+// *required* structure.
 fn scsi_save(
     session: &mut Drive,
     dir: &Path,

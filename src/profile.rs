@@ -525,9 +525,8 @@ pub fn load_disc(dir: &Path) -> DiscProfile {
 // mistake (or hostile fixture) that `fs::read` would otherwise OOM on.
 const MAX_BIN_BYTES: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
-// Read a profile blob, refusing files past MAX_BIN_BYTES. Ok(empty) means
-// "genuinely absent"; every other failure is Err so it gets logged.
-// See docs/profile-loader.md — read_bin_reported.
+// Read a profile blob, refusing files past MAX_BIN_BYTES. Ok(empty) means "genuinely absent";
+// every other failure is Err so it gets logged.
 fn read_bin_reported(path: &Path) -> Result<Vec<u8>, String> {
     match fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_BIN_BYTES => Err(format!(
@@ -575,9 +574,8 @@ fn is_contained_blob_name(name: &str) -> bool {
         && name != ".."
 }
 
-// Read a profile blob whose FILENAME came from the untrusted `drive.toml`,
-// enforcing it names a plain file inside the profile directory, not a path
-// escape. See docs/profile-loader.md — read_blob.
+// Read a profile blob whose FILENAME came from the untrusted `drive.toml`, enforcing it names a
+// plain file inside the profile directory, not a path escape.
 fn read_blob(dir: &Path, name: &str) -> Vec<u8> {
     if is_contained_blob_name(name) {
         read_bin(&dir.join(name))
@@ -1080,9 +1078,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // One `drive.toml` exercising every remaining loader branch not covered
-    // elsewhere: malformed entries, present blobs, and the loose rb_*.bin scan.
-    // See docs/profile-loader.md — toml_loader_covers_malformed_entries_and_positive_blob_loads.
+    // One `drive.toml` exercising every remaining loader branch not covered elsewhere:
+    // malformed entries, present blobs, and the loose rb_*.bin scan.
     #[test]
     fn toml_loader_covers_malformed_entries_and_positive_blob_loads() {
         let dir = test_scratch_dir("toml_full_coverage");

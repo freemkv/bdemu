@@ -147,7 +147,6 @@ mod tests {
     }
 
     // Short responses must zero the untouched tail, not leave stale host bytes.
-    // See docs/sg-short-response-zero.md — why this matters and what it pins.
     #[test]
     fn short_response_zeroes_the_untouched_tail() {
         let mut buf = vec![0xEEu8; 64];

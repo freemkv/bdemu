@@ -81,9 +81,8 @@ pub struct EmulatorState {
     pub disc: DiscState,
 }
 
-// Make `path` free to bind, WITHOUT stealing a socket somebody is using:
-// refuse loudly on a live peer, only reclaim a provably dead one.
-// See docs/control-socket-reclaim.md — why the old unconditional unlink was unsafe.
+// Make `path` free to bind, WITHOUT stealing a socket somebody is using: refuse loudly on a
+// live peer, only reclaim a provably dead one.
 fn reclaim_socket_path(path: &std::path::Path) -> Result<(), String> {
     if std::fs::symlink_metadata(path).is_err() {
         // Nothing there: the ordinary first-instance case.
@@ -558,9 +557,8 @@ mod tests {
         dir
     }
 
-    // Catches a regression to the unconditional unlink-before-bind: a second
-    // emulator would steal a LIVE socket out from under the first.
-    // See docs/control-socket-reclaim.md.
+    // Catches a regression to the unconditional unlink-before-bind: a second emulator would
+    // steal a LIVE socket out from under the first.
     #[test]
     fn a_live_control_socket_is_never_stolen() {
         let dir = test_scratch_dir("ctl_live");

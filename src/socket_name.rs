@@ -15,7 +15,6 @@ pub const SOCKET_FILENAME: &str = "bdemu.sock";
 /// indented with two leading spaces. Shared here by both the bind side
 /// (control.rs) and the connect side (bin.rs) so the two ends cannot disagree.
 pub const CONTROL_TERMINATOR: &str = ".";
-// See docs/socket-name.md — why the terminator exists (truncation detection).
 
 /// Environment variable naming this emulator instance.
 ///
@@ -24,7 +23,7 @@ pub const CONTROL_TERMINATOR: &str = ".";
 /// invocations don't collide. Read by BOTH the emulator (bind) and the CLI
 /// (connect); `bdemu run` passes it to the child it preloads. Unset keeps the
 /// historical `bdemu.sock` path and zero-configuration UX.
-pub const INSTANCE_ENV: &str = "BDEMU_INSTANCE"; // see docs/socket-name.md
+pub const INSTANCE_ENV: &str = "BDEMU_INSTANCE";
 
 // Longest accepted instance id: the id becomes part of a filename in
 // `$XDG_RUNTIME_DIR`, so 64 chars keeps the result inside the shortest

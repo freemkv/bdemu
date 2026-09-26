@@ -181,8 +181,6 @@ fn main() {
     }
 }
 
-// See docs/bin-cli.md — flag_value: guards against a flag value that looks
-// like another flag (e.g. `--profile --disc x`).
 fn flag_value(args: &[String], idx: usize) -> Option<&String> {
     match args.get(idx) {
         Some(v) if !v.starts_with('-') => Some(v),
@@ -198,8 +196,6 @@ struct RunArgs {
     cmd_start: usize,
 }
 
-// See docs/bin-cli.md — parse_run_args: pure scan (no print/exit) so the
-// missing-value diagnostic is unit-testable.
 fn parse_run_args(args: &[String]) -> Result<RunArgs, &'static str> {
     let mut profile: Option<String> = None;
     let mut disc: Option<String> = None;
@@ -236,8 +232,6 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, &'static str> {
     })
 }
 
-// See docs/bin-cli.md — exit_code_for: signal exits map to 128+signum
-// (shell convention) so CI can tell a crash from a normal failure.
 fn exit_code_for(status: &std::process::ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
     status
@@ -270,9 +264,6 @@ fn usage() {
     println!("https://github.com/freemkv/bdemu");
 }
 
-// See docs/bin-cli.md — BlobState: size (not mere existence) decides
-// pass/fail, so a zero-byte blob from an interrupted capture fails; absent
-// stays non-fatal.
 #[derive(Debug, PartialEq, Eq)]
 enum BlobState {
     Missing,
@@ -317,8 +308,6 @@ fn blob_state(path: &std::path::Path) -> BlobState {
     )
 }
 
-// See docs/bin-cli.md — validate_profile: returns the pass/fail verdict
-// instead of exiting, so the CI profile gate logic is unit-testable.
 fn validate_profile(dir: &str) -> bool {
     use std::path::Path;
     let p = Path::new(dir);
@@ -528,8 +517,6 @@ fn validate_profile(dir: &str) -> bool {
     ok
 }
 
-// See docs/bin-cli.md — send_control: `slow_read` picks a generous timeout
-// for the gigabyte-scale `load` reply vs. a short one for instant commands.
 fn send_control(cmd: &str, slow_read: bool) {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -638,9 +625,8 @@ enum ControlOutcome {
     Truncated,
 }
 
-// Truncation takes precedence over content: a reply missing its terminator
-// is untrustworthy even if the bytes that arrived start with "OK". See
-// docs/bin-cli.md for why this is split out of send_control.
+// Truncation takes precedence over content: a reply missing its terminator is untrustworthy
+// even if the bytes that arrived start with "OK".
 fn classify_response(lines: &[String], terminated: bool) -> ControlOutcome {
     if !terminated {
         ControlOutcome::Truncated
@@ -651,8 +637,8 @@ fn classify_response(lines: &[String], terminated: bool) -> ControlOutcome {
     }
 }
 
-// True when a response is a failure: any "ERR " line, or a first line that
-// doesn't start with "OK" (including empty/closed). See docs/bin-cli.md.
+// True when a response is a failure: any "ERR " line, or a first line that doesn't start with
+// "OK" (including empty/closed).
 fn response_is_error(lines: &[String]) -> bool {
     lines.iter().any(|l| l.starts_with("ERR "))
         || !lines.first().map(|l| l.starts_with("OK")).unwrap_or(false)
@@ -681,8 +667,8 @@ mod tests {
         v.to_string()
     }
 
-    // Pins that the CLI derives its socket path from the shared
-    // `socket_name` policy (see docs/bin-cli.md), not a local computation.
+    // Pins that the CLI derives its socket path from the shared `socket_name` policy, not a
+    // local computation.
     #[test]
     fn cli_socket_path_uses_the_shared_policy() {
         let p = crate::socket_name::socket_path_from(Some("/run/user/1000"), None)
@@ -726,9 +712,8 @@ mod tests {
         // First line lacks the OK prefix.
         assert!(response_is_error(&["unexpected".to_string()]));
     }
-    // Catches a regression to existence-only checking: a zero-length blob
-    // must be BROKEN, non-empty must pass, absent stays non-fatal. See
-    // docs/bin-cli.md.
+    // Catches a regression to existence-only checking: a zero-length blob must be BROKEN,
+    // non-empty must pass, absent stays non-fatal.
     #[test]
     fn zero_byte_blob_is_a_failure_not_a_pass() {
         use super::{BlobState, classify_blob};
@@ -760,8 +745,8 @@ mod tests {
         assert!(classify_blob(Err(ErrorKind::PermissionDenied)).is_broken());
     }
 
-    // Catches the mutation that ignores `terminated`: a reply cut short must
-    // be truncation even if it starts with "OK". See docs/bin-cli.md.
+    // Catches the mutation that ignores `terminated`: a reply cut short must be truncation even
+    // if it starts with "OK".
     #[test]
     fn missing_terminator_is_truncation_even_if_it_starts_ok() {
         // Terminator seen: ordinary OK / ERR handling.
@@ -881,8 +866,8 @@ mod tests {
         );
     }
 
-    // Catches a mutation that drops an `ok = false` assignment (a broken
-    // profile must not pass validate). See docs/bin-cli.md.
+    // Catches a mutation that drops an `ok = false` assignment (a broken profile must not pass
+    // validate).
     #[test]
     fn validate_returns_true_only_for_a_complete_profile() {
         let root = test_scratch_dir("validate_exit");
