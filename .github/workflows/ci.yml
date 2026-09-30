@@ -17,19 +17,16 @@ concurrency:
 
 # WHY THE SIBLING CHECKOUTS — this is NOT a monorepo.
 #
-# bdemu path-deps ../freemkv-unlock (with the `emulation` feature), and CI
-# checked out one repo, so that path pointed at nothing and cargo failed before
-# resolving a single dependency. Separately, the committed Cargo.toml resolves
-# libfreemkv from a git TAG, so where CI did build it was building against the
-# LAST RELEASE of the library rather than its dev tip — a coordinated change
+# The committed Cargo.toml resolves libfreemkv and freemkv-unlock (with the
+# `emulation` feature) from git TAGS, so a plain checkout builds against the
+# LAST RELEASE of both rather than their dev tips — a coordinated change
 # across the repos could not be verified until release-orchestrate.yml cut the tags.
 #
 # The fix mirrors the developer's local layout via the shared
 # checkout-siblings@v1 composite: every sibling is cloned at the branch-matched
 # ref alongside bdemu, reproducing ~/Developer/freemkv/{bdemu,libfreemkv,
-# freemkv-unlock} so `../freemkv-unlock` resolves as it does locally, and the
-# composite writes a .cargo/config.toml [patch.crates-io] redirecting the
-# libfreemkv git-tag patch at the sibling checkout. Config-level [patch]
+# freemkv-unlock}, and the composite writes a .cargo/config.toml
+# [patch.crates-io] redirecting both git-tag patches at the sibling checkouts. Config-level [patch]
 # wins over the manifest one — the same mechanism local development uses.
 #
 # `--locked` is gone even though bdemu DOES commit a Cargo.lock. The committed
@@ -80,7 +77,7 @@ jobs:
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
           checkout: libfreemkv freemkv-unlock
-          patch: libfreemkv
+          patch: libfreemkv freemkv-unlock
           self: bdemu
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -103,7 +100,7 @@ jobs:
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
           checkout: libfreemkv freemkv-unlock
-          patch: libfreemkv
+          patch: libfreemkv freemkv-unlock
           self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -121,13 +118,13 @@ jobs:
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
           checkout: libfreemkv freemkv-unlock
-          patch: libfreemkv
+          patch: libfreemkv freemkv-unlock
           self: bdemu
       - uses: dtolnay/rust-toolchain@stable
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories bans licenses sources
-          manifest-path: bdemu/Cargo.toml
+      - uses: taiki-e/install-action@cargo-deny
+      # Run from the repo dir so the generated .cargo/config.toml path patches apply.
+      - run: cargo deny --all-features check advisories bans licenses sources
+        working-directory: bdemu
 
   # What ships is a release build of the `bdemu` binary plus the cdylib
   # (release.yml packages both). `cargo test` only ever builds the dev profile,
@@ -142,7 +139,7 @@ jobs:
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
           checkout: libfreemkv freemkv-unlock
-          patch: libfreemkv
+          patch: libfreemkv freemkv-unlock
           self: bdemu
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -165,7 +162,7 @@ jobs:
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
         with:
           checkout: libfreemkv freemkv-unlock
-          patch: libfreemkv
+          patch: libfreemkv freemkv-unlock
           self: bdemu
       - uses: dtolnay/rust-toolchain@stable
         with:
