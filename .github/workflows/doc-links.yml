@@ -1,8 +1,8 @@
 name: doc-links
 
 # Thin caller → the canonical reusable doc-links gate in freemkv/.github.
-# bdemu path-deps freemkv-unlock and git-tag-pins libfreemkv, so both siblings
-# are checked out and a [patch.crates-io] redirects libfreemkv at its sibling;
+# bdemu git-tag-pins libfreemkv and freemkv-unlock, so both siblings are
+# checked out and a [patch.crates-io] redirects each at its sibling;
 # the reusable resolves the toolchain from rust-version and drops target/doc
 # first to avoid the cached-doc-tree race.
 on: [push, pull_request]
@@ -16,4 +16,4 @@ jobs:
     with:
       self: bdemu
       checkout: libfreemkv freemkv-unlock
-      patch: libfreemkv
+      patch: libfreemkv freemkv-unlock
