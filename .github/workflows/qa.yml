@@ -48,7 +48,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Stamp the next rc
@@ -76,7 +76,7 @@ jobs:
         os: ['ubuntu-latest']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
@@ -97,7 +97,7 @@ jobs:
   cross-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
