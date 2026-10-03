@@ -51,7 +51,7 @@ jobs:
   changelog:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Require a CHANGELOG entry for the crate version on main
         shell: bash
         run: |
@@ -71,7 +71,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
@@ -94,7 +94,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
@@ -112,7 +112,7 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
@@ -133,7 +133,7 @@ jobs:
   release-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
@@ -156,7 +156,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: bdemu
       - uses: freemkv/.github/.github/actions/checkout-siblings@v1
