@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0] — Unreleased
+
+### Changed
+
+- `freemkv-unlock` is a version dependency with a git-tag override, like the other crates, instead of a path dependency.
+- Dependabot updates are monthly and grouped; `actions/checkout` 7.
+
 ## [1.7.7] — 2026-09-26
 
 ### Maintenance
