@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.1] — Unreleased
+
+### Changed
+
+- Unit tests live in `*_tests.rs` side files. No behaviour change.
+
 ## [1.8.0] — 2026-10-05
 
 ### Changed
