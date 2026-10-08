@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.3] — 2026-10-08
+
+### Changed
+
+- Carry the 1.8.3 unified release version; no independent runtime changes.
+
 ## [1.8.2] — 2026-10-08
 
 ### Changed
