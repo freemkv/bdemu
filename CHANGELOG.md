@@ -1,10 +1,10 @@
 # Changelog
 
-## [1.9.0] — 2026-10-11
+## [1.8.4] — 2026-10-11
 
 ### Changed
 
-- Carry the 1.9.0 unified release version; no independent runtime changes.
+- Carry the 1.8.4 unified release version; no independent runtime changes.
 
 ## [1.8.3] — 2026-10-08
 
