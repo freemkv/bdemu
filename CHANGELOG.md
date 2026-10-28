@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.6] — UNRELEASED
+
+### Changed
+
+- Carry the 1.8.6 unified release version; no independent runtime changes.
+
 ## [1.8.5] — 2026-10-19
 
 ### Changed
