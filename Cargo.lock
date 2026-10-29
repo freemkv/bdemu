@@ -222,8 +222,8 @@ dependencies = [
 
 [[package]]
 name = "freemkv-unlock"
-version = "1.8.5"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.8.5#34f1c5697706e0694cd8e29eaea7b9232bb4ce91"
+version = "1.8.6"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.8.6#839762bef7a36d76a81d340cb92b5cefa89c3ca5"
 dependencies = [
  "aes",
  "anyhow",
@@ -307,8 +307,8 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libfreemkv"
-version = "1.8.5"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.8.5#0b71ac99a633a76124b20119091ec3b3340f0fd4"
+version = "1.8.6"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.8.6#eeb34826c96452d110a5f0a461eedc140a37132b"
 dependencies = [
  "aes",
  "base64",
