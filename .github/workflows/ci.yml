@@ -46,7 +46,7 @@ jobs:
   # Hard-fails on main (and PRs targeting main); warns elsewhere so an
   # in-progress dev/qa branch whose entry isn't written yet is not blocked.
   changelog:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,7 +67,7 @@ jobs:
           echo "::warning::${msg} (allowed on ${GITHUB_REF_NAME:-unknown}; required before it can reach main)."
 
   lint:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -91,7 +91,7 @@ jobs:
         working-directory: bdemu
 
   test:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -110,7 +110,7 @@ jobs:
         working-directory: bdemu
 
   deny:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -132,7 +132,7 @@ jobs:
   # and release-only link failures are real — the cdylib in particular is not
   # produced by any other job here.
   release-build:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -156,7 +156,7 @@ jobs:
   # job's sibling-checkout layout — bdemu is not a monorepo, so the siblings and
   # the generated .cargo/config.toml patch are what let cargo resolve at all.
   coverage:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

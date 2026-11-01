@@ -44,7 +44,7 @@ jobs:
   #
   # release.yml excludes v*-rc* so a candidate never publishes a release.
   rc-tag:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -71,7 +71,7 @@ jobs:
   # changes what the optimiser can prove. A test that only passes in debug is
   # a test that never guarded the binary anyone actually ships.
   release-tests:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -97,7 +97,7 @@ jobs:
   # the target it compiles for. Linting solely on the dev machine's host
   # target is how a lint that CI rejects reaches a push.
   cross-lint:
-    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, ': bump version')) }}
+    if: ${{ !(github.event_name == 'push' && github.ref_type == 'branch' && contains(github.event.head_commit.message, 'bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
