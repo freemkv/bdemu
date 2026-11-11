@@ -39,7 +39,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bdemu"
-version = "1.8.8"
+version = "1.8.9"
 dependencies = [
  "freemkv-unlock",
  "libc",
@@ -222,8 +222,8 @@ dependencies = [
 
 [[package]]
 name = "freemkv-unlock"
-version = "1.8.8"
-source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.8.8#57df3649643689ab97e6ea54c8319b72d30b2d11"
+version = "1.8.9"
+source = "git+https://github.com/freemkv/freemkv-unlock?tag=v1.8.9#fb5a51d40ff29b1aead3713b0ed4b7a0d781fb5b"
 dependencies = [
  "aes",
  "anyhow",
@@ -307,8 +307,8 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libfreemkv"
-version = "1.8.8"
-source = "git+https://github.com/freemkv/libfreemkv?tag=v1.8.8#927b301c73ece1be151cca3187fd68039e4192e8"
+version = "1.8.9"
+source = "git+https://github.com/freemkv/libfreemkv?tag=v1.8.9#4db1a72ee5ada587db48f3b3e6f15ee6285265eb"
 dependencies = [
  "aes",
  "base64",
