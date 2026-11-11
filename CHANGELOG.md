@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.9] — UNRELEASED
+
+### Changed
+
+- Maintenance: CI runs once per commit; no code changes.
+
 ## [1.8.8] — 2026-11-01
 
 ### Changed
