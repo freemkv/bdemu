@@ -51,20 +51,7 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
     // The control socket joins "discs" onto profile_dir as a base directory,
     // so when the profile is a JSON file we store its parent directory
     // (otherwise load/list-discs would build a bogus nested path and fail).
-    let profile_base = {
-        let p = std::path::PathBuf::from(&path);
-        if p.is_dir() {
-            p
-        } else {
-            // A bare filename like "profile.json" yields parent "" (never None),
-            // which would join "discs" onto "" as a cwd-relative path that
-            // diverges from "./discs" after a chdir. Map empty parent to ".".
-            match p.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-                _ => std::path::PathBuf::from("."),
-            }
-        }
-    };
+    let profile_base = profile_base(&path);
 
     let profile = Arc::new(Mutex::new(loaded));
     let emu_state = Arc::new(Mutex::new(control::EmulatorState {
@@ -84,6 +71,22 @@ static STATE: Lazy<Option<State>> = Lazy::new(|| {
 
     Some(State { profile, emu_state })
 });
+
+// Base directory the control socket joins "discs" onto: the profile dir
+// itself, or a JSON profile's parent ("." for a bare filename).
+fn profile_base(path: &str) -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(path);
+    if p.is_dir() {
+        p
+    } else {
+        // A bare filename yields parent "" (never None), which would diverge
+        // from "./discs" after a chdir. Map empty parent to ".".
+        match p.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => std::path::PathBuf::from("."),
+        }
+    }
+}
 
 type RealIoctl = unsafe extern "C" fn(libc::c_int, libc::c_ulong, ...) -> libc::c_int;
 
@@ -180,3 +183,7 @@ pub unsafe extern "C" fn ioctl(
     }
     0
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
