@@ -438,3 +438,13 @@ fn list_discs_sanitises_hostile_directory_names() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn load_verb_parses_its_disc_name() {
+    assert!(matches!(parse_command("load disc_a"), Some(Command::Load(n)) if n == "disc_a"));
+    let resp = run_one(b"load ../escape\n".to_vec());
+    assert!(
+        resp.contains("ERR invalid disc name"),
+        "load must reach cmd_load, not the unknown-command path: {resp:?}"
+    );
+}

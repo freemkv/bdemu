@@ -642,3 +642,84 @@ fn adjacent_non_overlapping_ranges_are_kept() {
     let (_, map) = parse_sector_file(data);
     assert_eq!(map.len(), 2, "touching-but-disjoint ranges must be kept");
 }
+
+// Every byte of each range's start/count must come from its own table slot.
+#[test]
+fn range_table_fields_are_read_from_their_own_bytes() {
+    let mut data = bdsm_header(2);
+    data.extend_from_slice(&0x0A0B_0C0Du32.to_le_bytes());
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&0x1A1B_1C1Du32.to_le_bytes());
+    data.extend_from_slice(&2u32.to_le_bytes());
+    data.extend_from_slice(&vec![0u8; 3 * 2048]);
+    let (_, map) = parse_sector_file(data);
+    assert_eq!(map, vec![(0x0A0B_0C0D, 1, 28), (0x1A1B_1C1D, 2, 28 + 2048)]);
+}
+
+#[test]
+fn blob_cap_is_sixteen_gib() {
+    assert_eq!(super::MAX_BIN_BYTES, 1u64 << 34);
+}
+
+// Exercises [files] overrides, a valid current_profile, a non-rb_ read_buffer
+// file, a commented-out key, and non-matching loose-file names.
+#[test]
+fn toml_loader_honours_files_section_and_skips_comments() {
+    let dir = test_scratch_dir("toml_files_section");
+    std::fs::write(
+        dir.join("drive.toml"),
+        "[drive]\n\
+         product = \"REAL\"\n\
+         # product = \"COMMENTED\"\n\
+         current_profile = \"0x0041\"\n\
+         [files]\n\
+         inquiry = \"inq_custom.bin\"\n\
+         rpc_state = \"rpc_custom.bin\"\n\
+         mode_2a = \"m2a_custom.bin\"\n\
+         [read_buffer]\n\
+         0x10 = \"buffer_ten.bin\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("inq_custom.bin"), b"inq").unwrap();
+    std::fs::write(dir.join("rpc_custom.bin"), b"rpc").unwrap();
+    std::fs::write(dir.join("m2a_custom.bin"), b"m2a").unwrap();
+    std::fs::write(dir.join("buffer_ten.bin"), b"ten").unwrap();
+    std::fs::write(dir.join("rb_33.dat"), b"not a buffer").unwrap();
+    std::fs::write(dir.join("xyz44.bin"), b"not a buffer").unwrap();
+
+    let p = LoadedProfile::load(dir.to_str().unwrap()).expect("must load");
+    assert_eq!(p.name, "REAL", "a commented-out key must be ignored");
+    assert_eq!(p.current_profile, 0x0041);
+    assert_eq!(p.inquiry, b"inq");
+    assert_eq!(p.rpc_state, b"rpc");
+    assert_eq!(p.mode_2a, b"m2a");
+    assert_eq!(p.read_bufs, vec![(0x10, b"ten".to_vec())]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn safe_disc_dir_rejects_a_symlink_escape_and_a_plain_file() {
+    let root = test_scratch_dir("safe_disc_dir_escape");
+    let discs = root.join("discs");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&discs).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, discs.join("escape")).unwrap();
+    std::fs::write(discs.join("not_a_dir"), b"x").unwrap();
+
+    assert!(safe_disc_dir(&discs, "escape").is_none(), "symlink escape");
+    assert!(safe_disc_dir(&discs, "not_a_dir").is_none(), "plain file");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn load_disc_ignores_names_that_are_not_ds_bin() {
+    let dir = test_scratch_dir("load_disc_non_ds");
+    std::fs::write(dir.join("ds_09.dat"), b"x").unwrap();
+    std::fs::write(dir.join("abc0a.bin"), b"x").unwrap();
+    let disc = super::load_disc(&dir);
+    assert!(disc.disc_structures.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
