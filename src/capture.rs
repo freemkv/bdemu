@@ -60,59 +60,12 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
     // REQUEST) failures on *required* structures, so a drive fault that drops
     // capacity/TOC/PFI/DI is reported as incomplete, not clean.
     println!();
-    let mut metadata_errors: u32 = 0;
-    // (filename, label, cdb, size, required)
-    metadata_errors += scsi_save(
-        &mut session,
-        dir,
-        "capacity.bin",
-        "READ_CAPACITY",
-        &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        8,
-        true,
-    ) as u32;
-    metadata_errors += scsi_save(
-        &mut session,
-        dir,
-        "toc.bin",
-        "READ_TOC",
-        &[0x43, 0, 0, 0, 0, 0, 0, 0x10, 0, 0],
-        4096,
-        true,
-    ) as u32;
-    metadata_errors += scsi_save(
-        &mut session,
-        dir,
-        "disc_info.bin",
-        "READ_DISC_INFO",
-        &[0x51, 0, 0, 0, 0, 0, 0, 0x01, 0, 0],
-        256,
-        true,
-    ) as u32;
-    // PFI (0x00) and DI (0x01) are required; BCA (0x03) and the disc control /
-    // read-only physical-format structures are optional and may legitimately be
-    // absent (-> "n/a").
-    for (fmt, name, required) in &[
-        (0x00u8, "PFI", true),
-        (0x01, "DI", true),
-        (0x03, "BCA", false),
-        // 0x0E and 0x0F are distinct DISC_STRUCTURE formats — they must not
-        // share a label, or the capture log and ds_0e.bin / ds_0f.bin
-        // annotations are ambiguous.
-        (0x0E, "DCB", false),    // Disc Control Block
-        (0x0F, "PFI_RO", false), // Physical Format Information (read-only)
-    ] {
-        let cdb = [0xAD, 0x01, 0, 0, 0, 0, 0, *fmt, 0x10, 0x04, 0, 0];
-        metadata_errors += scsi_save(
-            &mut session,
-            dir,
-            &format!("ds_{:02x}.bin", fmt),
-            &format!("DISC_STRUCTURE 0x{:02X} ({})", fmt, name),
-            &cdb,
-            4100,
-            *required,
-        ) as u32;
-    }
+    let mut exec = |cdb: &[u8], buf: &mut [u8]| {
+        session
+            .scsi_execute(cdb, scsi::DataDirection::FromDevice, buf, 5000)
+            .map(|r| r.bytes_transferred)
+    };
+    let metadata_errors = capture_metadata(&mut exec, dir);
 
     // Parse UDF, discover metadata ranges
     println!();
@@ -125,13 +78,7 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         .metadata_sector_ranges(&mut session)
         .map_err(|e| format!("ranges: {}", e))?;
 
-    // Single source of truth for sectors each range contributes: `end`
-    // saturates, so a hostile range can make raw `count` overstate `written`.
-    // Use `written` everywhere (header, total, read loop) so they never disagree.
-    let ranges: Vec<(u32, u32)> = raw_ranges
-        .iter()
-        .map(|(start, count)| (*start, start.saturating_add(*count) - start))
-        .collect();
+    let ranges = clamp_ranges(&raw_ranges);
 
     // Saturating sum so a hostile set of ranges cannot overflow-panic here.
     let total: u32 = ranges.iter().fold(0u32, |acc, r| acc.saturating_add(r.1));
@@ -142,122 +89,23 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         total as f64 * SECTOR_SIZE as f64 / 1e6
     );
     for (i, (s, written)) in ranges.iter().enumerate() {
-        // u64-cast the end so a hostile start+count near u32::MAX does not
-        // overflow this display arithmetic.
-        let end = *s as u64 + *written as u64;
-        println!("    range {}: LBA {}-{} ({} sectors)", i, s, end, written);
+        println!("{}", range_line(i, *s, *written));
     }
 
     // Write BDSM sparse sector map
     println!();
     let mut file =
         fs::File::create(dir.join("sectors.bin")).map_err(|e| format!("create: {}", e))?;
+    write_bdsm_header(&mut file, &ranges).map_err(|e| format!("write: {}", e))?;
 
-    // Header
-    file.write_all(b"BDSM")
-        .map_err(|e| format!("write: {}", e))?;
-    file.write_all(&1u32.to_le_bytes())
-        .map_err(|e| format!("write: {}", e))?;
-    file.write_all(&(ranges.len() as u32).to_le_bytes())
-        .map_err(|e| format!("write: {}", e))?;
-    for (start, written) in &ranges {
-        // `written` (saturated) — never the raw count — so the header never
-        // claims more sectors than the read loop emits below.
-        file.write_all(&start.to_le_bytes())
-            .map_err(|e| format!("write: {}", e))?;
-        file.write_all(&written.to_le_bytes())
-            .map_err(|e| format!("write: {}", e))?;
-    }
-
-    // Read and write each range
-    let chunk: u16 = 32;
-    // One reusable read buffer for the whole capture instead of a fresh
-    // `vec![0u8; ...]` per chunk (~160 malloc+memset per 5 MB capture). Sliced
-    // to the chunk size each iteration; zeroed explicitly on a read error.
-    let mut buf = vec![0u8; chunk as usize * SECTOR_SIZE];
-    let mut done: u32 = 0;
-    let mut errors: u32 = 0;
-
-    let mut last_print: u32 = 0;
-    for (ri, (start, written)) in ranges.iter().enumerate() {
-        let mut lba = *start;
-        // `written` is already the saturated span (end - start) computed once
-        // above, so `start + written` is exactly the clamped end and matches
-        // what the header advertised; saturating_add stays as belt-and-braces.
-        let end = start.saturating_add(*written);
-
-        while lba < end {
-            // Clamp the chunk size in u32 BEFORE truncating to u16: `(end -
-            // lba) as u16` alone truncates to 0 when the remainder is a nonzero
-            // multiple of 65536, which would make `lba += 0` spin forever.
-            let n = next_chunk(lba, end, chunk);
-            let slice = &mut buf[..n as usize * SECTOR_SIZE];
-
-            match session.read(lba, n, slice, true) {
-                // Buffer is reused, so a short read leaves stale bytes from the
-                // previous chunk. Zero the untouched tail so the fixture records
-                // zeros, not stale data; `bytes` is clamped against over-report.
-                Ok(bytes) => zero_fill_tail(slice, bytes),
-                Err(e) => {
-                    errors += 1;
-                    // Preserve zero-fill-on-error: zero the whole slice we are
-                    // about to write so a bad sector is recorded as zeros, not
-                    // stale data from a prior chunk.
-                    slice.fill(0);
-                    if errors <= 3 {
-                        eprintln!("\n  Read error at LBA {}: {}", lba, e);
-                    }
-                }
-            }
-            file.write_all(slice).map_err(|e| format!("write: {}", e))?;
-            lba += n as u32;
-            done += n as u32;
-
-            // `done` steps by up to `chunk` (32), so `done % 500` would almost
-            // never line up; track the last printed count instead.
-            if done - last_print >= 500 || done >= total {
-                last_print = done;
-                eprint!(
-                    "\r  Reading: {} / {} sectors (range {}/{})",
-                    done,
-                    total,
-                    ri + 1,
-                    ranges.len()
-                );
-            }
-        }
-    }
+    let errors = copy_ranges(&ranges, total, &mut file, |lba, n, slice| {
+        session.read(lba, n, slice, true).map_err(|e| e.to_string())
+    })?;
     eprintln!();
     file.flush().map_err(|e| format!("flush: {}", e))?;
 
-    if errors > 0 {
-        println!("  {} read errors (zero-filled)", errors);
-    }
-    // Compute in u64 to match the surrounding overflow-safe display math (the
-    // range-table and progress lines above already u64-cast); usize arithmetic
-    // here could overflow on 32-bit targets.
-    let file_size = 12u64 + ranges.len() as u64 * 8 + total as u64 * SECTOR_SIZE as u64;
-    // Qualify the summary on a partial capture: read errors zero-fill sectors and
-    // a hard metadata failure drops a required SCSI structure, so this line must
-    // not read as a clean success when fixture_result (below) will return Err.
-    if errors > 0 || metadata_errors > 0 {
-        println!(
-            "  Saved {} sectors ({:.1} MB) in {} ranges (PARTIAL: {} read error{}, {} metadata error{} — see above)",
-            total,
-            file_size as f64 / 1e6,
-            ranges.len(),
-            errors,
-            if errors == 1 { "" } else { "s" },
-            metadata_errors,
-            if metadata_errors == 1 { "" } else { "s" },
-        );
-    } else {
-        println!(
-            "  Saved {} sectors ({:.1} MB) in {} ranges",
-            total,
-            file_size as f64 / 1e6,
-            ranges.len()
-        );
+    for line in capture_summary(total, ranges.len(), errors, metadata_errors) {
+        println!("{}", line);
     }
 
     // Eject disc so user can swap. Gated behind an explicit flag: eject is
@@ -280,7 +128,193 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
     fixture_result(errors, metadata_errors)?;
 
     // Rename output dir to slugified volume ID
-    let slug = slugify(&udf.volume_id);
+    let final_dir = rename_to_slug(dir, &udf.volume_id)?;
+    println!();
+    println!("Capture complete: {}/", final_dir.display());
+    Ok(())
+}
+
+// Capture every SCSI metadata structure; returns the count of hard failures
+// on required structures.
+fn capture_metadata(exec: &mut Exec<'_>, dir: &Path) -> u32 {
+    let mut metadata_errors: u32 = 0;
+    // (filename, label, cdb, size, required)
+    metadata_errors += scsi_save(
+        exec,
+        dir,
+        "capacity.bin",
+        "READ_CAPACITY",
+        &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        8,
+        true,
+    ) as u32;
+    metadata_errors += scsi_save(
+        exec,
+        dir,
+        "toc.bin",
+        "READ_TOC",
+        &[0x43, 0, 0, 0, 0, 0, 0, 0x10, 0, 0],
+        4096,
+        true,
+    ) as u32;
+    metadata_errors += scsi_save(
+        exec,
+        dir,
+        "disc_info.bin",
+        "READ_DISC_INFO",
+        &[0x51, 0, 0, 0, 0, 0, 0, 0x01, 0, 0],
+        256,
+        true,
+    ) as u32;
+    // PFI (0x00) and DI (0x01) are required; BCA (0x03) and the disc control /
+    // read-only physical-format structures are optional (-> "n/a").
+    for (fmt, name, required) in &[
+        (0x00u8, "PFI", true),
+        (0x01, "DI", true),
+        (0x03, "BCA", false),
+        // 0x0E and 0x0F are distinct formats and must not share a label.
+        (0x0E, "DCB", false),    // Disc Control Block
+        (0x0F, "PFI_RO", false), // Physical Format Information (read-only)
+    ] {
+        let cdb = [0xAD, 0x01, 0, 0, 0, 0, 0, *fmt, 0x10, 0x04, 0, 0];
+        metadata_errors += scsi_save(
+            exec,
+            dir,
+            &format!("ds_{:02x}.bin", fmt),
+            &format!("DISC_STRUCTURE 0x{:02X} ({})", fmt, name),
+            &cdb,
+            4100,
+            *required,
+        ) as u32;
+    }
+    metadata_errors
+}
+
+// Single source of truth for sectors each range contributes: `end`
+// saturates, so a hostile range can make raw `count` overstate `written`.
+fn clamp_ranges(raw: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    raw.iter()
+        .map(|(start, count)| (*start, start.saturating_add(*count) - start))
+        .collect()
+}
+
+fn range_line(i: usize, start: u32, written: u32) -> String {
+    // u64 so a hostile start+count near u32::MAX cannot overflow.
+    let end = start as u64 + written as u64;
+    format!(
+        "    range {}: LBA {}-{} ({} sectors)",
+        i, start, end, written
+    )
+}
+
+// BDSM header: magic, version, range count, then (start, written) pairs.
+fn write_bdsm_header<W: Write>(w: &mut W, ranges: &[(u32, u32)]) -> std::io::Result<()> {
+    w.write_all(b"BDSM")?;
+    w.write_all(&1u32.to_le_bytes())?;
+    w.write_all(&(ranges.len() as u32).to_le_bytes())?;
+    for (start, written) in ranges {
+        w.write_all(&start.to_le_bytes())?;
+        w.write_all(&written.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+// Progress is due every 500 sectors and on the final chunk.
+fn progress_due(done: u32, last_print: u32, total: u32) -> bool {
+    done - last_print >= 500 || done >= total
+}
+
+// Read every range in `chunk`-sized pieces and append the sectors to `out`;
+// returns the read-error count (bad chunks are written as zeros).
+fn copy_ranges<W: Write>(
+    ranges: &[(u32, u32)],
+    total: u32,
+    out: &mut W,
+    mut read: impl FnMut(u32, u16, &mut [u8]) -> Result<usize, String>,
+) -> Result<u32, String> {
+    let chunk: u16 = 32;
+    // One reusable buffer, sliced per chunk and zeroed on error.
+    let mut buf = vec![0u8; chunk as usize * SECTOR_SIZE];
+    let mut done: u32 = 0;
+    let mut errors: u32 = 0;
+    let mut last_print: u32 = 0;
+    for (ri, (start, written)) in ranges.iter().enumerate() {
+        let mut lba = *start;
+        let end = start.saturating_add(*written);
+
+        while lba < end {
+            // next_chunk clamps in u32 so the u16 chunk can never be 0.
+            let n = next_chunk(lba, end, chunk);
+            let slice = &mut buf[..n as usize * SECTOR_SIZE];
+
+            match read(lba, n, slice) {
+                // Reused buffer: zero any tail a short read left stale.
+                Ok(bytes) => zero_fill_tail(slice, bytes),
+                Err(e) => {
+                    errors += 1;
+                    // Record a bad chunk as zeros, not a prior chunk's data.
+                    slice.fill(0);
+                    if errors <= 3 {
+                        eprintln!("\n  Read error at LBA {}: {}", lba, e);
+                    }
+                }
+            }
+            out.write_all(slice).map_err(|e| format!("write: {}", e))?;
+            lba += n as u32;
+            done += n as u32;
+
+            if progress_due(done, last_print, total) {
+                last_print = done;
+                eprint!(
+                    "\r  Reading: {} / {} sectors (range {}/{})",
+                    done,
+                    total,
+                    ri + 1,
+                    ranges.len()
+                );
+            }
+        }
+    }
+    Ok(errors)
+}
+
+// Bytes the BDSM sectors.bin occupies: header, range table, sector payload.
+// u64 so the size cannot overflow on 32-bit targets.
+fn sparse_file_size(n_ranges: usize, total: u32) -> u64 {
+    12u64 + n_ranges as u64 * 8 + total as u64 * SECTOR_SIZE as u64
+}
+
+// The end-of-capture summary lines. A partial capture must not read as clean.
+fn capture_summary(total: u32, n_ranges: usize, errors: u32, metadata_errors: u32) -> Vec<String> {
+    let mut lines = Vec::new();
+    if errors > 0 {
+        lines.push(format!("  {} read errors (zero-filled)", errors));
+    }
+    let mb = sparse_file_size(n_ranges, total) as f64 / 1e6;
+    if errors > 0 || metadata_errors > 0 {
+        lines.push(format!(
+            "  Saved {} sectors ({:.1} MB) in {} ranges (PARTIAL: {} read error{}, {} metadata error{} — see above)",
+            total,
+            mb,
+            n_ranges,
+            errors,
+            if errors == 1 { "" } else { "s" },
+            metadata_errors,
+            if metadata_errors == 1 { "" } else { "s" },
+        ));
+    } else {
+        lines.push(format!(
+            "  Saved {} sectors ({:.1} MB) in {} ranges",
+            total, mb, n_ranges
+        ));
+    }
+    lines
+}
+
+// Rename `dir` to the slugified volume ID (with _2, _3... on collision);
+// returns the final directory, unchanged when the slug is empty.
+fn rename_to_slug(dir: &Path, volume_id: &str) -> Result<std::path::PathBuf, String> {
+    let slug = slugify(volume_id);
     if !slug.is_empty() {
         let parent = dir.parent().unwrap_or(Path::new("."));
         let mut final_dir = parent.join(&slug);
@@ -291,16 +325,11 @@ pub fn capture_disc(device: &str, output_dir: &str, eject: bool) -> Result<(), S
         }
         if final_dir != dir {
             fs::rename(dir, &final_dir).map_err(|e| format!("rename: {}", e))?;
-            println!();
-            println!("Capture complete: {}/", final_dir.display());
-            return Ok(());
+            return Ok(final_dir);
         }
     }
-    println!();
-    println!("Capture complete: {}/", output_dir);
-    Ok(())
+    Ok(dir.to_path_buf())
 }
-
 // Map the capture's error counts to a result: a non-zero `read_errors` means
 // zero-filled sectors, a non-zero `metadata_errors` means a required SCSI
 // structure failed for a hard (not "absent") reason. Either is incomplete.
@@ -331,10 +360,13 @@ fn slugify(name: &str) -> String {
         .to_string()
 }
 
+// Runs one CDB into a buffer, returning the bytes transferred.
+type Exec<'a> = dyn FnMut(&[u8], &mut [u8]) -> libfreemkv::Result<usize> + 'a;
+
 // Capture one SCSI metadata structure to `filename`; returns true on a hard failure of a
 // *required* structure.
 fn scsi_save(
-    session: &mut Drive,
+    exec: &mut Exec<'_>,
     dir: &Path,
     filename: &str,
     label: &str,
@@ -344,11 +376,11 @@ fn scsi_save(
 ) -> bool {
     print_step(&format!("  {}... ", label));
     let mut buf = vec![0u8; size];
-    match session.scsi_execute(cdb, scsi::DataDirection::FromDevice, &mut buf, 5000) {
-        Ok(r) => {
+    match exec(cdb, &mut buf) {
+        Ok(transferred) => {
             // Clamp to the requested size: a buggy/hostile transport that
             // over-reports bytes_transferred would otherwise panic the slice.
-            let n = r.bytes_transferred.min(size);
+            let n = transferred.min(size);
             // Write straight from the buffer slice — every caller discards the
             // bytes, so the intermediate Vec clone was pure waste.
             if let Err(e) = fs::write(dir.join(filename), &buf[..n]) {
