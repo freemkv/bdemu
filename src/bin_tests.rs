@@ -259,3 +259,12 @@ fn validate_returns_true_only_for_a_complete_profile() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// A scan that runs off the end of args (flags only) must stop, not index past it.
+#[test]
+fn parse_run_args_with_only_flags_has_no_command() {
+    let a = ["bdemu", "run", "--profile", "p"].map(s).to_vec();
+    let r = parse_run_args(&a).expect("well-formed");
+    assert_eq!(r.profile.as_deref(), Some("p"));
+    assert_eq!(r.cmd_start, 0);
+}
