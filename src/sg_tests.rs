@@ -78,3 +78,66 @@ fn empty_transfer_reports_full_residual() {
     hdr.write_response(&[1, 2, 3]);
     assert_eq!(hdr.resid, 512);
 }
+
+#[test]
+fn clear_status_resets_every_output_field() {
+    let mut buf = [0u8; 4];
+    let mut hdr = hdr_over(&mut buf);
+    hdr.status = 2;
+    hdr.masked_status = 1;
+    hdr.msg_status = 3;
+    hdr.sb_len_wr = 18;
+    hdr.host_status = 7;
+    hdr.driver_status = 8;
+    hdr.resid = 9;
+    hdr.clear_status();
+    assert_eq!(
+        (
+            hdr.status,
+            hdr.masked_status,
+            hdr.msg_status,
+            hdr.sb_len_wr,
+            hdr.host_status,
+            hdr.driver_status,
+            hdr.resid
+        ),
+        (0, 0, 0, 0, 0, 0, 0)
+    );
+}
+
+// Too small a declared sense buffer: status is set but no sense is written.
+#[test]
+fn check_condition_skips_sense_when_buffer_is_too_small() {
+    let mut buf = [0u8; 4];
+    let mut sense = [0xAAu8; 32];
+    let mut hdr = hdr_over(&mut buf);
+    hdr.sbp = sense.as_mut_ptr();
+    hdr.mx_sb_len = 8;
+    hdr.set_check_condition(0x05, 0x24, 0x00);
+    assert_eq!(hdr.status, 0x02);
+    assert_eq!(hdr.sb_len_wr, 0);
+    assert!(sense.iter().all(|&b| b == 0xAA), "sense must be untouched");
+}
+
+#[test]
+fn opcode_is_zero_when_cmd_len_is_zero() {
+    let mut buf = [0u8; 4];
+    let cdb = [0x28u8, 1, 2, 3];
+    let mut hdr = hdr_over(&mut buf);
+    hdr.cmdp = cdb.as_ptr();
+    hdr.cmd_len = 0;
+    assert_eq!(hdr.opcode(), 0);
+    hdr.cmd_len = 4;
+    assert_eq!(hdr.opcode(), 0x28);
+}
+
+#[test]
+fn cdb_past_cmd_len_reads_as_zero() {
+    let mut buf = [0u8; 4];
+    let cdb = [0x28u8, 1, 2, 3];
+    let mut hdr = hdr_over(&mut buf);
+    hdr.cmdp = cdb.as_ptr();
+    hdr.cmd_len = 2;
+    assert_eq!(hdr.cdb(1), 1);
+    assert_eq!(hdr.cdb(3), 0, "bytes past cmd_len are not part of the CDB");
+}

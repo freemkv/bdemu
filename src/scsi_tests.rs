@@ -1221,3 +1221,206 @@ fn unhandled_opcode_is_illegal_request() {
     assert_eq!(sense[2], 0x05, "ILLEGAL REQUEST");
     assert_eq!(sense[12], 0x20, "INVALID COMMAND OPERATION CODE");
 }
+
+// --- Mutation-hardening: exact bytes, boundaries, dispatch filters ---
+
+#[test]
+fn call_numbers_strictly_increase() {
+    let a = call();
+    let b = call();
+    assert!(b > a, "call() must advance: {a} then {b}");
+}
+
+/// Build an INQUIRY + 0x010C feature that libfreemkv parses into `id`.
+fn profile_for_identity(id: &freemkv_unlock::ld::Identity) -> LoadedProfile {
+    let mut p = empty_profile();
+    let mut put = |start: usize, end: usize, s: &str| {
+        let field = &mut p.inquiry[start..end];
+        field.fill(b' ');
+        field[..s.len()].copy_from_slice(s.as_bytes());
+    };
+    put(8, 16, id.vendor_id.trim());
+    put(16, 32, id.product_id.trim());
+    put(32, 36, id.product_revision.trim());
+    put(36, 43, id.vendor_specific.trim());
+    let mut feat = vec![0x01, 0x0C, 0x00, 0x0C];
+    let mut date = [b' '; 12];
+    date[..id.firmware_date.trim().len()].copy_from_slice(id.firmware_date.trim().as_bytes());
+    feat.extend_from_slice(&date);
+    p.features.push((0x010C, feat));
+    p
+}
+
+#[test]
+fn unlock_signature_comes_from_the_matching_catalog_entry() {
+    let catalog = freemkv_unlock::ld::profiles().expect("bundled catalog parses");
+    let fits = |id: &freemkv_unlock::ld::Identity| {
+        id.vendor_id.trim().len() <= 8
+            && id.product_id.trim().len() <= 16
+            && id.product_revision.trim().len() <= 4
+            && id.vendor_specific.trim().len() <= 7
+            && !id.firmware_date.trim().is_empty()
+            && id.firmware_date.trim().len() <= 12
+    };
+    let (profile, want) = catalog
+        .mt1959_a
+        .iter()
+        .chain(&catalog.mt1959_b)
+        .chain(&catalog.renesas)
+        .filter(|d| fits(&d.identity))
+        .find_map(|d| {
+            let p = profile_for_identity(&d.identity);
+            let lf = libfreemkv::DriveId::from_inquiry(&p.inquiry, d.identity.firmware_date.trim());
+            let id = freemkv_unlock::DriveId {
+                vendor_id: lf.vendor_id.clone(),
+                product_id: lf.product_id.clone(),
+                product_revision: lf.product_revision.clone(),
+                vendor_specific: lf.vendor_specific.clone(),
+                firmware_date: lf.firmware_date.clone(),
+            };
+            let sig = catalog.get(&id)?.profile.signature;
+            (sig != [0; 4] && sig != [1; 4]).then_some((p, sig))
+        })
+        .expect("catalog must hold a drive with a non-zero signature");
+    assert_eq!(lookup_unlock_signature(&profile, 0), want);
+}
+
+#[test]
+fn unlock_signature_is_zero_for_an_unknown_drive() {
+    assert_eq!(lookup_unlock_signature(&empty_profile(), 0), [0; 4]);
+}
+
+#[test]
+fn standard_inquiry_serves_the_profile_bytes_not_a_vpd_page() {
+    let _g = guard();
+    let mut p = empty_profile();
+    for (i, b) in p.inquiry.iter_mut().enumerate() {
+        *b = i as u8 | 0x40;
+    }
+    let (status, data, _) = run(&p, &[0x12, 0x00, 0x00, 0, 96, 0], 96);
+    assert_eq!(status, 0x00);
+    assert_eq!(data, p.inquiry);
+}
+
+#[test]
+fn read_with_zero_count_is_good_even_without_sector_source() {
+    let _g = guard();
+    let (status, _, sense) = run_read(&disc_profile(), &read10_cdb(7, 0), 0);
+    assert_eq!(status, 0x00, "a zero-length READ is not a miss: {sense:?}");
+}
+
+#[test]
+fn read12_serves_a_captured_sector_at_lba_u32_max() {
+    let _g = guard();
+    let profile = sparse_disc_profile(&[(u32::MAX, 1)], 0x5C);
+    let (status, data, _) = run_read(&profile, &read12_cdb(u32::MAX, 1), 1);
+    assert_eq!(status, 0x00, "LBA u32::MAX itself is addressable");
+    assert!(data.iter().all(|&b| b == 0x5C));
+}
+
+#[test]
+fn sparse_map_entry_past_the_sector_buffer_is_a_miss() {
+    let _g = guard();
+    let mut p = disc_profile();
+    if let Some(d) = p.disc.as_mut() {
+        d.sectors = vec![0x11; SECTOR_SIZE];
+        d.sector_map = vec![(0, 2, 0)];
+    }
+    let (status, _, sense) = run_read(&p, &read10_cdb(1, 1), 1);
+    assert_eq!(
+        status, 0x02,
+        "a map claiming bytes the file lacks must miss"
+    );
+    assert_eq!(sense[12], 0x11);
+}
+
+#[test]
+fn flat_dump_multi_sector_read_serves_each_lba_in_order() {
+    let _g = guard();
+    let mut p = disc_profile();
+    if let Some(d) = p.disc.as_mut() {
+        d.sectors = (0..3u8)
+            .flat_map(|k| std::iter::repeat_n(k + 1, SECTOR_SIZE))
+            .collect();
+    }
+    let (status, data, _) = run_read(&p, &read10_cdb(1, 2), 2);
+    assert_eq!(status, 0x00);
+    assert!(data[..SECTOR_SIZE].iter().all(|&b| b == 2), "LBA 1 first");
+    assert!(data[SECTOR_SIZE..].iter().all(|&b| b == 3), "then LBA 2");
+}
+
+#[test]
+fn sector_data_pattern_fills_every_sector_of_a_multi_sector_read() {
+    let _g = guard();
+    let mut p = disc_profile();
+    let pattern: Vec<u8> = (0..SECTOR_SIZE).map(|i| (i % 251) as u8).collect();
+    if let Some(d) = p.disc.as_mut() {
+        d.sector_data = pattern.clone();
+    }
+    let (status, data, _) = run_read(&p, &read10_cdb(0, 2), 2);
+    assert_eq!(status, 0x00);
+    assert_eq!(&data[..SECTOR_SIZE], &pattern[..]);
+    assert_eq!(&data[SECTOR_SIZE..], &pattern[..]);
+}
+
+fn data_len(data: &[u8]) -> u32 {
+    u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+}
+
+#[test]
+fn get_config_rt2_returns_only_the_named_feature() {
+    let _g = guard();
+    let cdb = [0x46, 0x02, 0x00, 0x01, 0, 0, 0, 0, 64, 0];
+    let (status, data, _) = run(&profile_with_features(), &cdb, 64);
+    assert_eq!(status, 0x00);
+    assert_eq!(data_len(&data), 8, "header(4) + one 4-byte descriptor");
+    assert!(data[12..].iter().all(|&b| b == 0), "no second feature");
+}
+
+#[test]
+fn get_config_rt1_keeps_the_current_feature_bytes() {
+    let _g = guard();
+    let cdb = [0x46, 0x01, 0, 0, 0, 0, 0, 0, 64, 0];
+    let (_, data, _) = run(&profile_with_features(), &cdb, 64);
+    assert_eq!(&data[8..12], &[0x00, 0x01, 0x01, 0x00]);
+}
+
+#[test]
+fn get_config_rt0_body_carries_every_descriptor() {
+    let _g = guard();
+    let cdb = [0x46, 0x00, 0, 0, 0, 0, 0, 0, 64, 0];
+    let (_, data, _) = run(&profile_with_features(), &cdb, 64);
+    assert_eq!(
+        &data[8..16],
+        &[0x00, 0x01, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00]
+    );
+}
+
+#[test]
+fn get_event_without_media_class_returns_the_short_header() {
+    let _g = guard();
+    let cdb = [0x4A, 0x01, 0, 0, 0x00, 0, 0, 0, 8, 0];
+    let (_, data, _) = run(&disc_profile(), &cdb, 8);
+    assert_eq!(&data[..4], &[0x00, 0x02, 0x00, 0x10]);
+    assert!(data[4..].iter().all(|&b| b == 0), "no media descriptor");
+}
+
+#[test]
+fn mode_sense_all_pages_serves_the_profile_page() {
+    let _g = guard();
+    let mut p = empty_profile();
+    p.mode_2a = vec![0x00, 0x1A, 0, 0, 0, 0, 0, 0, 0x2A, 0x12];
+    let (status, data, _) = run(&p, &[0x5A, 0, 0x3F, 0, 0, 0, 0, 0, 10, 0], 10);
+    assert_eq!(status, 0x00);
+    assert_eq!(data, p.mode_2a);
+}
+
+#[test]
+fn report_key_rpc_class_with_other_format_is_illegal_request() {
+    let _g = guard();
+    let cdb = [0xA4, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0x01, 0];
+    let (status, _, sense) = run(&empty_profile(), &cdb, 8);
+    assert_eq!(status, 0x02);
+    assert_eq!(sense[2], 0x05);
+    assert_eq!(sense[12], 0x24);
+}
