@@ -13,7 +13,13 @@ Part of the [freemkv](https://github.com/freemkv) project. **Linux only.**
 
 **[Download latest release](https://github.com/freemkv/bdemu/releases/latest)**
 
-Or build from source: `cargo build --release`
+The release is a tarball (`bdemu-x86_64-linux.tar.gz`) with the `bdemu` binary,
+`libbdemu.so` and the sample `profiles/`.
+
+Or build from source with `cargo build --release` (see `rust-version` in
+`Cargo.toml` for the minimum Rust). The build produces both `bdemu` and
+`libbdemu.so`. `bdemu run` looks for `libbdemu.so` next to the `bdemu` binary,
+so keep them together.
 
 ## Quick Start
 
@@ -42,18 +48,20 @@ Control (while emulator is running):
   list-discs                                     List available discs
 
 Examples:
-  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture, auto-names (add --eject to eject)
-  bdemu run -p profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000 -d sample -- freemkv info disc://
-  bdemu validate profiles/hl-dt-st-bd-re-bu40n-1.03-nm00000/
+  bdemu capture-disc /dev/sr0 ./testbed/disc     Capture + auto-name (add --eject to eject)
+  bdemu run -p profiles/bu40n -d sample -- ./freemkv info
+  bdemu validate profiles/bu40n/
 ```
+
+`-p` and `-d` are short forms of `--profile` and `--disc`.
 
 ## Smart Capture
 
-`capture-disc` uses libfreemkv to parse the disc's UDF filesystem and capture only the sectors needed for emulation. A typical capture is 15-80 MB instead of 25-90 GB.
+`capture-disc` uses libfreemkv to parse the disc's UDF filesystem and capture only the sectors needed for emulation. A capture is a few MB instead of tens of GB.
 
-After capture, the output directory is automatically renamed to the disc's volume ID (e.g. `disc` becomes `sample_film`). If the name already exists, a number is appended (`sample_film_2`).
+After a clean capture, the output directory is renamed to a slug of the disc's volume ID (e.g. `disc` becomes `sample_film`). If the name already exists, a number is appended (`sample_film_2`). A partial capture (read errors) keeps the bytes it wrote but is not renamed.
 
-The tray is **not** ejected by default — pass `--eject` to `capture-disc` if you
+The tray is **not** ejected by default. Pass `--eject` to `capture-disc` if you
 want the disc ejected once the capture finishes. Eject is irreversible on
 slot-loading drives (you have to physically reload the disc), so it is opt-in.
 
@@ -78,6 +86,7 @@ profiles/my-drive/
 +-- gc_*.bin             # GET_CONFIG features
 +-- rpc_state.bin        # REPORT KEY RPC state
 +-- mode_2a.bin          # MODE SENSE page 2A
++-- rb_*.bin             # READ BUFFER responses (some profiles)
 +-- discs/
     +-- my-disc/
         +-- toc.bin      # READ TOC response
@@ -94,7 +103,7 @@ profiles/my-drive/
 | `BDEMU_PROFILE` | Path to drive profile directory |
 | `BDEMU_DISC` | Disc subdirectory name |
 | `BDEMU_QUIET` | Suppress SCSI command logging |
-| `BDEMU_INSTANCE` | Instance id for the control socket (`$XDG_RUNTIME_DIR/bdemu-<id>.sock`). Unset uses `bdemu.sock`. Set it — on both the `bdemu run` side and the `status`/`load`/`eject` side — when running two emulators at once, otherwise the second refuses to start rather than stealing the first's socket. Ids may contain ASCII letters, digits, `-` and `_`. |
+| `BDEMU_INSTANCE` | Instance id for the control socket (`$XDG_RUNTIME_DIR/bdemu-<id>.sock`). Unset uses `bdemu.sock`. Set it on both the `bdemu run` side and the `status`/`load`/`eject` side when running two emulators at once, otherwise the second refuses to start rather than stealing the first's socket. Ids may contain ASCII letters, digits, `-` and `_`. |
 
 ## License
 
