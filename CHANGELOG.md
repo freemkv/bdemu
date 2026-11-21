@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.11] — UNRELEASED
+
+### Changed
+
+- Aligned the component version and sibling dependency pins with freemkv 1.8.11. No emulator behavior changes.
+
 ## [1.8.10] — 2026-11-17
 
 ### Changed
